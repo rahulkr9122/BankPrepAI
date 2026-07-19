@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: bankprepai
+    env: python
+    plan: free
+    buildCommand: "pip install -r backend/requirements.txt"
+    startCommand: "gunicorn --bind 0.0.0.0:5000 backend.app:app"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9
+      - key: FLASK_APP
+        value: backend/app.py
+      - key: FLASK_ENV
+        value: production
+      - key: GROQ_API_KEY
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true

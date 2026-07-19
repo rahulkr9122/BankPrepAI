@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BankPrepAI - Topic-wise Exam</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+</head>
+<body>
+  <div class="dashboard-shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Banking Mock Test Studio</p>
+        <h1>BankPrepAI</h1>
+        <p class="hero-copy">Generate a realistic mock exam for SBI, IBPS, and RRB with syllabus-based topic mixing and difficulty tuning.</p>
+      </div>
+    </header>
+
+    <main class="app-grid">
+      <section class="panel controls-panel">
+        <div class="panel-header">
+          <h2>Topic-wise Exam</h2>
+        </div>
+        <div class="form-grid-enhanced">
+          <div class="form-column">
+            <label class="field">
+              <span>Exam Type</span>
+              <select id="examType"></select>
+            </label>
+            <label class="field">
+              <span>Topic</span>
+              <select id="topicSelect"></select>
+            </label>
+          </div>
+        </div>
+        <div class="button-group">
+            <button id="generateExamBtn" class="primary-btn-enhanced">Generate Exam</button>
+            <a href="/" class="secondary-btn">Go Back</a>
+        </div>
+      </section>
+
+      <section class="panel exam-panel">
+        <div id="status" class="status"></div>
+        <div id="timer" class="timer hidden"></div>
+        <div id="questionArea" class="quiz hidden"></div>
+        <div id="results" class="results hidden"></div>
+      </section>
+    </main>
+    <footer style="text-align: center; margin-top: 20px; color: var(--text-color-light);">
+      Engineered by Rahul
+    </footer>
+    </div>
+    <script>
+    let currentQuestions = [];
+    let currentIndex = 0;
+    let remainingSeconds = 0;
+    let timerId = null;
+    let examTypes = [];
+
+    const examTypeSelect = document.getElementById('examType');
+    const generateExamBtn = document.getElementById('generateExamBtn');
+    const topicSelect = document.getElementById('topicSelect');
+    const statusBox = document.getElementById('status');
+    const timerBox = document.getElementById('timer');
+    const questionArea = document.getElementById('questionArea');
+    const resultsBox = document.getElementById('results');
+
+    function formatTime(totalSeconds) {
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      return `${minutes}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    function renderExamOptions(types) {
+      examTypeSelect.innerHTML = types.map((exam) => `<option value="${exam.name}">${exam.name}</option>`).join('');
+      const firstExam = types[0];
+      if (firstExam) {
+        topicSelect.innerHTML = firstExam.topics.map((topic) => `<option value="${topic}">${topic}</option>`).join('');
+        updateExamMeta(firstExam.name);
+      }
+      examTypeSelect.dispatchEvent(new Event('change'));
+    }
+
+    function updateExamMeta(examType) {
+      const selected = examTypes.find((item) => item.name === examType);
+      if (!selected) return;
+
+      topicSelect.innerHTML = selected.topics.map((topic) => `<option value="${topic}">${topic}</option>`).join('');
+    }
+
+    function startTimer(totalMinutes) {
+      clearInterval(timerId);
+      remainingSeconds = Number(totalMinutes) * 60;
+      timerBox.classList.remove('hidden');
+      timerBox.textContent = `Time Left: ${formatTime(remainingSeconds)}`;
+
+      timerId = setInterval(() => {
+        remainingSeconds -= 1;
+        timerBox.textContent = `Time Left: ${formatTime(remainingSeconds)}`;
+
+        if (remainingSeconds <= 0) {
+          clearInterval(timerId);
+          submitExam(true);
+        }
+      }, 1000);
+    }
+
+    function saveCurrentAnswer() {
+      const selected = document.querySelector('input[name="questionOption"]:checked');
+      if (selected) {
+        currentQuestions[currentIndex].selectedAnswer = selected.value;
+      }
+    }
+
+    function renderQuestion() {
+      const question = currentQuestions[currentIndex];
+      if (!question) return;
+
+      questionArea.innerHTML = `
+        <article class="question-card">
+          <div class="question-head">
+            <div>
+              <h3>${currentIndex + 1} of ${currentQuestions.length}</h3>
+              <span class="topic-tag">${question.topic || 'Banking Exam'}</span>
+            </div>
+            <span class="topic-tag soft">Mock Section</span>
+          </div>
+          <h2>${question.question}</h2>
+          <div class="options">
+            ${question.options.map((option, optionIndex) => `
+              <label class="option">
+                <input type="radio" name="questionOption" value="${option}" ${option === question.selectedAnswer ? 'checked' : ''} />
+                <span>${optionIndex + 1}. ${option}</span>
+              </label>
+            `).join('')}
+          </div>
+          <div class="navigation">
+            <button id="prevBtn" class="ghost-btn" ${currentIndex === 0 ? 'disabled' : ''}>Previous</button>
+            <button id="nextBtn" class="ghost-btn" ${currentIndex === currentQuestions.length - 1 ? 'disabled' : ''}>Next</button>
+            <button id="finishBtn" class="primary-btn">Finish Exam</button>
+          </div>
+        </article>
+      `;
+
+      document.getElementById('prevBtn').addEventListener('click', () => {
+        if (currentIndex > 0) {
+          saveCurrentAnswer();
+          currentIndex -= 1;
+          renderQuestion();
+        }
+      });
+
+      document.getElementById('nextBtn').addEventListener('click', () => {
+        if (currentIndex < currentQuestions.length - 1) {
+          saveCurrentAnswer();
+          currentIndex += 1;
+          renderQuestion();
+        }
+      });
+
+      document.getElementById('finishBtn').addEventListener('click', () => submitExam(false));
+    }
+
+    async function generateExam() {
+      statusBox.innerHTML = `
+        <div class="loading-container">
+            <div class="anim-student">
+                <div class="head">
+                    <div class="hair"></div>
+                </div>
+                <div class="head"><div class="hair"></div></div>
+                <div class="body"></div>
+                <div class="book"></div>
+                <div class="pen"></div>
+            </div>
+            <p class="loading-text">Our AI is crafting your questions. Great things take time. Your patience is appreciated!</p>
+        </div>
+      `;
+      questionArea.classList.add('hidden');
+      resultsBox.classList.add('hidden');
+      resultsBox.innerHTML = '';
+      generateExamBtn.disabled = true;
+      generateExamBtn.textContent = 'Generating...';
+
+      try {
+        const response = await fetch('/api/generate-topic-exam', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            examType: examTypeSelect.value,
+            topic: topicSelect.value
+          })
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || 'Unable to generate topic exam.');
+        }
+
+        currentQuestions = (data.questions || []).map((question) => ({ ...question, selectedAnswer: null }));
+        currentIndex = 0;
+        statusBox.textContent = `${data.examType} topic exam ready for ${topicSelect.value}. Difficulty: ${data.difficulty}`;
+        questionArea.classList.remove('hidden');
+        startTimer(data.duration);
+        renderQuestion();
+      } catch (error) {
+        statusBox.textContent = `Error: ${error.message}`;
+        generateExamBtn.disabled = false;
+        generateExamBtn.textContent = 'Generate Exam';
+      }
+    }
+
+    async function submitExam(isTimedOut = false) {
+      if (!isTimedOut) {
+        const confirmSubmission = confirm('Are you sure you want to submit your exam? You cannot make changes after submission.');
+        if (!confirmSubmission) {
+          return; 
+        }
+      }
+      clearInterval(timerId);
+      saveCurrentAnswer();
+
+      const answers = {};
+      currentQuestions.forEach((question, index) => {
+        answers[index] = question.selectedAnswer || '';
+      });
+
+      statusBox.textContent = isTimedOut ? 'Time is up. Scoring your exam...' : 'Scoring your exam...';
+
+      try {
+        const response = await fetch('/api/score-exam', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ answers })
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || 'Unable to score exam.');
+        }
+
+        questionArea.classList.add('hidden');
+        resultsBox.classList.remove('hidden');
+        resultsBox.innerHTML = `
+          <div class="results-header">
+            <h2>Exam Result</h2>
+            <div class="score-badge">${data.score} / ${data.total} (${data.percentage}%)</div>
+          </div>
+          <p class="verdict">${data.passed ? 'Pass' : 'Need Improvement'}</p>
+          ${data.results.map((result, index) => `
+            <div class="result-card">
+              <p><strong>Q${index + 1}:</strong> ${result.question}</p>
+              <p><strong>Topic:</strong> ${result.topic}</p>
+              <p>Your answer: ${result.userAnswer || 'No answer selected'}</p>
+              <p>Correct answer: ${result.correctAnswer}</p>
+              <p>${result.isCorrect ? '✅ Correct' : '❌ Incorrect'}</p>
+            </div>
+          `).join('')}
+        `;
+        statusBox.textContent = isTimedOut ? 'Exam auto-submitted due to timeout.' : 'Exam submitted successfully.';
+      } catch (error) {
+        statusBox.textContent = error.message;
+      }
+    }
+
+    fetch('/api/exam-types')
+      .then((res) => res.json())
+      .then((data) => {
+        examTypes = data.examTypes;
+        renderExamOptions(examTypes);
+      })
+      .catch(() => {
+        statusBox.textContent = 'Unable to load exam types.';
+      });
+
+    examTypeSelect.addEventListener('change', () => updateExamMeta(examTypeSelect.value));
+    generateExamBtn.addEventListener('click', generateExam);
+  </script>
+</body>
+</html>

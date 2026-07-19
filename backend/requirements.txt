@@ -1,0 +1,7 @@
+Flask==3.0.3
+Flask-Session
+google-generativeai
+requests
+groq
+python-dotenv
+gunicorn

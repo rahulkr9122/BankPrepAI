@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Welcome to BankPrepAI</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+</head>
+<body>
+  <div class="dashboard-shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Your Personal Mock Test Platform</p>
+        <h1>Welcome to BankPrepAI</h1>
+        <p class="hero-copy">Sharpen your skills with AI-powered mock tests tailored for SBI, IBPS, and RRB exams. Let's get started!</p>
+      </div>
+    </header>
+
+    <main class="app-grid-center">
+      <section class="panel controls-panel">
+        <div class="panel-header">
+          <h2>Start Your Practice Session</h2>
+        </div>
+
+        <div class="exam-choice-grid" style="justify-content: center;">
+            <a href="/topic-wise-exam" class="exam-choice-card" style="max-width: 400px; text-align: center;">
+                <h3>Practice by Topic</h3>
+                <p>Choose a specific subject to focus on and strengthen your weak areas.</p>
+            </a>
+        </div>
+      </section>
+    </main>
+    <footer style="text-align: center; margin-top: 20px; color: var(--text-color-light);">
+      Engineered by Rahul
+    </footer>
+  </div>
+</body>
+</html>

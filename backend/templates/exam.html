@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Exam: {{ exam_type }} - BankPrepAI</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="dashboard-shell">
+        <div class="panel">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                <div class="status">
+                    Question <span id="current-question-number">1</span> of {{ questions|length }}
+                </div>
+                <div class="timer" id="timer">--:--</div>
+            </div>
+
+            <form id="exam-form">
+                <div class="quiz">
+                    {% for question in questions %}
+                    <div class="question-card {% if not loop.first %}hidden{% endif %}" id="question-{{ loop.index0 }}">
+                        <div class="question-head">
+                            <h3>Question {{ loop.index }}</h3>
+                            <span class="topic-tag">{{ question.topic }}</span>
+                        </div>
+                        <h2>{{ question.question }}</h2>
+                        <div class="options">
+                            {% for option in question.options %}
+                            <label class="option">
+                                <input type="radio" name="question-{{ loop.parent.loop.index0 }}" value="{{ option }}">
+                                <span>{{ option }}</span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <div class="navigation">
+                    <button type="button" id="prev-btn" class="ghost-btn" disabled>Previous</button>
+                    <button type="button" id="next-btn" class="primary-btn">Next</button>
+                    <button type="submit" id="submit-btn" class="primary-btn hidden">Submit Exam</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <footer style="text-align: center; margin-top: 20px; color: var(--text-color-light);">
+      Engineered by Rahul
+    </footer>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const examForm = document.getElementById('exam-form');
+            const questions = document.querySelectorAll('.question-card');
+            const nextBtn = document.getElementById('next-btn');
+            const prevBtn = document.getElementById('prev-btn');
+            const submitBtn = document.getElementById('submit-btn');
+            const questionNumberSpan = document.getElementById('current-question-number');
+            const timerEl = document.getElementById('timer');
+
+            let currentQuestionIndex = 0;
+            const totalQuestions = questions.length;
+            let timeLeft = {{ total_duration }} * 60;
+            let timerInterval;
+
+            function showQuestion(index) {
+                questions.forEach((q, i) => {
+                    q.classList.toggle('hidden', i !== index);
+                });
+                questionNumberSpan.textContent = index + 1;
+                prevBtn.disabled = index === 0;
+
+                if (index === totalQuestions - 1) {
+                    nextBtn.classList.add('hidden');
+                    submitBtn.classList.remove('hidden');
+                } else {
+                    nextBtn.classList.remove('hidden');
+                    submitBtn.classList.add('hidden');
+                }
+            }
+
+            function startTimer() {
+                timerInterval = setInterval(() => {
+                    if (timeLeft <= 0) {
+                        clearInterval(timerInterval);
+                        alert('Time is up! Submitting your exam automatically.');
+                        examForm.requestSubmit();
+                        return;
+                    }
+
+                    timeLeft--;
+                    const minutes = Math.floor(timeLeft / 60);
+                    let seconds = timeLeft % 60;
+                    seconds = seconds < 10 ? '0' + seconds : seconds;
+                    timerEl.textContent = `${minutes}:${seconds}`;
+                }, 1000);
+            }
+
+            nextBtn.addEventListener('click', () => {
+                if (currentQuestionIndex < totalQuestions - 1) {
+                    currentQuestionIndex++;
+                    showQuestion(currentQuestionIndex);
+                }
+            });
+
+            prevBtn.addEventListener('click', () => {
+                if (currentQuestionIndex > 0) {
+                    currentQuestionIndex--;
+                    showQuestion(currentQuestionIndex);
+                }
+            });
+
+            examForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                clearInterval(timerInterval); // Stop the timer
+
+                const formData = new FormData(examForm);
+                const answers = {};
+                for (let i = 0; i < totalQuestions; i++) {
+                    answers[i] = formData.get(`question-${i}`) || null;
+                }
+
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Scoring...';
+
+                try {
+                    const response = await fetch('/api/score-exam', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ answers }),
+                    });
+
+                    const results = await response.json();
+                    if (!response.ok) {
+                        throw new Error(results.error || 'Failed to score exam.');
+                    }
+
+                    alert(`Exam Finished!\n\nYour score: ${results.score} out of ${results.total} (${results.percentage}%)`);
+                    window.location.href = '/'; // Redirect to homepage
+
+                } catch (error) {
+                    console.error('Error submitting exam:', error);
+                    alert(`There was an error submitting your exam: ${error.message}`);
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Submit Exam';
+                }
+            });
+
+            showQuestion(0);
+            startTimer();
+        });
+    </script>
+</body>
+</html>
