@@ -630,15 +630,106 @@ button:hover {
   }
 }
 
+@media (max-width: 768px) {
+  .hero h1 {
+    font-size: clamp(1.8rem, 5vw, 2.5rem);
+  }
+
+  .hero-copy {
+    font-size: 1rem;
+  }
+
+  .panel-header h2 {
+    font-size: 1.5rem;
+  }
+
+  .form-grid-enhanced,
+  .button-group {
+    grid-template-columns: 1fr;
+  }
+
+  .exam-choice-grid {
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .results-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+}
+
 @media (max-width: 600px) {
   .dashboard-shell {
     padding: 16px;
   }
   .hero {
     padding: 24px;
+    margin-bottom: 24px;
   }
   .panel {
+    padding: 16px;
+  }
+  .exam-choice-card {
     padding: 20px;
+  }
+  .exam-choice-card h3 {
+    font-size: 1.4rem;
+  }
+}
+
+@media (max-width: 480px) {
+  body {
+    padding: 0;
+  }
+  
+  .dashboard-shell {
+    padding: 12px;
+  }
+
+  .hero {
+    padding: 20px 16px;
+    border-radius: 16px;
+  }
+
+  .hero h1 {
+      font-size: 1.6rem;
+  }
+
+  .hero-copy {
+      font-size: 0.95rem;
+  }
+
+  .panel-header h2 {
+    font-size: 1.3rem;
+  }
+  
+  .question-card h2 {
+    font-size: 1.1rem;
+  }
+
+  .option {
+    padding: 10px 12px;
+    gap: 10px;
+  }
+
+  .navigation {
+    flex-direction: column;
+  }
+
+  .navigation button {
+    width: 100%;
+  }
+
+  .button-group {
+      gap: 10px;
+  }
+
+  .primary-btn-enhanced,
+  .secondary-btn {
+      padding: 14px 20px;
+      font-size: 1rem;
   }
 }
 
