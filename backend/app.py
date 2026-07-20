@@ -1,10 +1,13 @@
 import json
 import os
 import re
+import datetime
+import time
 
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 from flask_session import Session
 from groq import Groq
+import groq
 import requests
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -38,10 +41,22 @@ Session(app)
 # GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-pro")
 # USE_GEMINI = str(os.getenv("USE_GEMINI", "true")).lower() in {"1", "true", "yes", "on"}
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# Load multiple Groq API keys for load balancing
+GROQ_API_KEYS_STR = os.getenv("GROQ_API_KEYS", "")
+GROQ_API_KEYS = [key.strip() for key in GROQ_API_KEYS_STR.split(',') if key.strip()]
+
+if not GROQ_API_KEYS:
+    # Fallback to the single key environment variable for backward compatibility
+    single_key = os.getenv("GROQ_API_KEY")
+    if single_key:
+        GROQ_API_KEYS.append(single_key)
+
+if not GROQ_API_KEYS:
+    app.logger.warning("No Groq API keys found. Please set `GROQ_API_KEYS` in your .env file as a comma-separated string.")
+
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 USE_GROQ = str(os.getenv("USE_GROQ", "true")).lower() in {"1", "true", "yes", "on"}
-QUESTION_BATCH_SIZE = int(os.getenv("QUESTION_BATCH_SIZE", "10"))
 
 EXAM_LIBRARY = {
     "SBI Clerk": {
@@ -139,6 +154,7 @@ def extract_and_normalize_questions(json_string):
             "options": options,
             "answer": answer,
             "topic": item.get("topic") or "General Banking",
+            "sub_topic": item.get("sub_topic") or "General",
         })
 
     return normalized
@@ -146,98 +162,123 @@ def extract_and_normalize_questions(json_string):
 
 
 def call_groq(prompt):
-    if not GROQ_API_KEY:
-        raise ValueError("GROQ_API_KEY is not set.")
+    if not GROQ_API_KEYS:
+        raise ValueError("GROQ_API_KEYS are not set. Please add them to your .env file.")
 
-    client = Groq(api_key=GROQ_API_KEY, timeout=180.0)
-    retries = 3
-    for attempt in range(retries):
-        try:
-            chat_completion = client.chat.completions.create(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": prompt,
-                    }
-                ],
-                model=GROQ_MODEL,
-                response_format={"type": "json_object"},
-                temperature=0.2,
-            )
-            raw_text = chat_completion.choices[0].message.content
-            return extract_and_normalize_questions(raw_text)
-        except groq.BadRequestError as e:
-            if "json_validate_failed" in str(e):
-                app.logger.warning(f"Groq JSON validation failed on attempt {attempt + 1}. Retrying...")
-                # Modify the prompt slightly to encourage a different response
-                prompt += " "
-                continue
-            raise RuntimeError(f"Groq API call failed: {e}") from e
-        except Exception as exc:
-            if "response_format" in str(exc):
-                raise RuntimeError(f"The selected model '{GROQ_MODEL}' may not support JSON mode. Error: {exc}") from exc
-            raise RuntimeError(f"Groq API call failed: {exc}") from exc
-    raise RuntimeError("Groq API call failed after multiple retries.")
+    start_key_index = session.get("groq_key_index", 0)
+    
+    for i in range(len(GROQ_API_KEYS)):
+        key_index = (start_key_index + i) % len(GROQ_API_KEYS)
+        current_key = GROQ_API_KEYS[key_index]
+        
+        app.logger.info(f"Using Groq API key with index: {key_index}")
+        client = Groq(api_key=current_key, timeout=180.0)
+
+        # Inner loop for retrying on JSON validation errors
+        for attempt in range(3):
+            try:
+                chat_completion = client.chat.completions.create(
+                    messages=[{"role": "user", "content": prompt}],
+                    model=GROQ_MODEL,
+                    response_format={"type": "json_object"},
+                    temperature=0.2,
+                )
+                raw_text = chat_completion.choices[0].message.content
+                session["groq_key_index"] = key_index
+                return extract_and_normalize_questions(raw_text)
+
+            except groq.BadRequestError as e:
+                if "json_validate_failed" in str(e):
+                    app.logger.warning(f"Groq JSON validation failed on attempt {attempt + 1} with key index {key_index}. Retrying prompt.")
+                    prompt += "\nReminder: The output must be a single, valid JSON object and nothing else."
+                    time.sleep(1)  # Small delay before retry
+                    continue  # Retry with same key, modified prompt
+                
+                app.logger.error(f"Groq BadRequestError with key at index {key_index}: {e}. Switching key.")
+                break  # Break from inner loop to switch key
+
+            except groq.AuthenticationError:
+                app.logger.warning(f"Groq API key at index {key_index} failed authentication. Switching to the next key.")
+                break  # Break from inner loop to switch key
+
+            except groq.RateLimitError:
+                app.logger.warning(f"Groq API key at index {key_index} is rate-limited. Switching to the next key.")
+                break  # Break from inner loop to switch key
+
+            except Exception as exc:
+                app.logger.error(f"An unexpected error occurred with key at index {key_index}: {exc}. Switching key.")
+                break  # Break from inner loop to switch key
+    
+    # If we exit the loops, it means all keys and retries have failed.
+    raise RuntimeError("Groq API call failed for all available keys and retries.")
 
 
 
 
-def build_prompt(exam_type, topics, difficulty, count, batch_number, total_batches):
+def build_prompt(exam_type, topics, difficulty, count):
     topic_list = ", ".join(topics)
     
     prompt_lines = [
         f"Generate exactly {count} multiple-choice banking mock test questions for the exam type '{exam_type}'. "
-        f"This is batch {batch_number} of {total_batches}. "
         f"Required syllabus topics: {topic_list}. "
         f"Difficulty must match '{difficulty}'. "
+        "The style, format, and complexity of the questions should closely mirror those found in the previous years' question papers for the specified exam. "
         "Create a completely fresh, fully new question set every time this request is made. "
         "Do not reuse prior questions, do not repeat the same wording patterns, and do not fall back to any canned bank. "
+        "Ensure that all questions generated in this single response are unique and not duplicates of each other. "
         "Create a balanced mix of questions distributed across all listed topics. "
     ]
 
     # Add topic-specific instructions
     if "English" in topics:
         prompt_lines.append(
-            "For English questions, prioritize contextual understanding (reading comprehension, sentence rearrangement, cloze tests) over simple vocabulary. "
+            "For English questions, generate questions from the following specific sub-topics: reading comprehension, phrase replacement, fill in the blanks, odd sentence out, para jumbles, cloze test, sentence connectors, misspelt words, error detection, word swap, word rearrangement, idioms and phrases, synonyms and antonyms. "
         )
     if "Numerical Ability" in topics:
         prompt_lines.append(
-            "For Numerical Ability questions, focus on data interpretation, simplification, number series, and arithmetic word problems. Questions must require calculation. "
+            "For Numerical Ability questions, generate questions from the following specific sub-topics: simplification/approximation, missing series/wrong series, quadratic equation, Data Interpretation (DI), and Arithmetic (including time and work, pipe and cistern, problems with ages, average, ratio and proportion, simple and compound interest, partnership). Questions must require calculation. "
         )
     if "Reasoning" in topics:
         prompt_lines.append(
-            "For Reasoning questions, include puzzles, seating arrangements, syllogisms, and logical deductions. "
+            "For Reasoning questions, generate questions from the following specific sub-topics: blood relation, direction and distance, alphanumeric series, syllogism, coding decoding, seating arrangement, inequality, box based puzzle, floor based puzzle, day/month/year/age based puzzle, and linear row/double row arrangement. "
         )
 
     prompt_lines.extend([
         "Use realistic bank exam wording and a clear mix of easy, moderate, and higher-value questions. "
         "Return raw JSON only, no markdown, no explanation, no headings. "
+        "The JSON structure for each question must be: {\"question\": \"...\", \"options\": [\"...\"], \"answer\": \"...\", \"topic\": \"...\", \"sub_topic\": \"...\"}. "
         "The 'topic' field must be one of the required syllabus topics. "
+        "For each question, the 'sub_topic' field must be filled with the specific sub-topic it belongs to (e.g., 'reading comprehension', 'seating arrangement', 'data interpretation'). "
         "Every answer must be exactly one of the option strings, not a number index. "
     ])
     
     return "".join(prompt_lines)
 
 
-def generate_questions_in_batches(exam_type, topics, difficulty, count):
-    questions = []
-    remaining = count
-    batch_index = 1
-    total_batches = max(1, (count + QUESTION_BATCH_SIZE - 1) // QUESTION_BATCH_SIZE)
+def generate_questions(exam_type, topics, difficulty, count):
+    """Generates the specified number of questions in a single API call, ensuring no duplicates."""
+    prompt = build_prompt(exam_type, topics, difficulty, count)
+    
+    questions = call_groq(prompt)
 
-    while remaining > 0:
-        batch_size = min(QUESTION_BATCH_SIZE, remaining)
-        prompt = build_prompt(exam_type, topics, difficulty, batch_size, batch_index, total_batches)
-        
-        batch_questions = call_groq(prompt)
+    if not questions:
+        raise RuntimeError("Groq API returned no questions.")
 
-        if not batch_questions:
-            raise RuntimeError(f"Groq returned no questions for batch {batch_index}/{total_batches}")
+    # Deduplicate questions based on the question text to prevent repeats.
+    unique_questions = []
+    seen_questions = set()
+    for q in questions:
+        question_text = q.get("question", "").strip().lower()
+        if question_text and question_text not in seen_questions:
+            unique_questions.append(q)
+            seen_questions.add(question_text)
+    
+    questions = unique_questions
 
-        questions.extend(batch_questions)
-        remaining -= len(batch_questions)
-        batch_index += 1
-
+    # Log a warning if the AI returns fewer questions than requested after deduplication.
+    if len(questions) < count:
+        app.logger.warning(f"AI returned fewer questions ({len(questions)}) than requested ({count}) after deduplication.")
+    
     return questions[:count]
 
 
@@ -250,10 +291,14 @@ def get_exam_config(exam_type):
 
 @app.get("/")
 def index():
-    return render_template("index.html")
+    has_history = "exam_history" in session and session["exam_history"]
+    return render_template("index.html", has_history=has_history)
 
 
-
+@app.get("/dashboard")
+def dashboard():
+    exam_history = session.get("exam_history", [])
+    return render_template("dashboard.html", exam_history=exam_history)
 
 
 @app.get("/topic-wise-exam")
@@ -282,11 +327,12 @@ def health():
     groq_error = None
     model_found = False
 
-    if not GROQ_API_KEY:
-        groq_error = "GROQ_API_KEY is not set."
+    if not GROQ_API_KEYS:
+        groq_error = "GROQ_API_KEYS is not set in the environment."
     else:
         try:
-            client = Groq(api_key=GROQ_API_KEY, timeout=30.0)
+            # Use the first key for the health check
+            client = Groq(api_key=GROQ_API_KEYS[0], timeout=30.0)
             # A simple chat completion to verify connection and model
             _ = client.chat.completions.create(
                 messages=[{"role": "user", "content": "ping"}],
@@ -355,7 +401,7 @@ def generate_exam():
     difficulty = config.get("difficulty")
 
     try:
-        questions = generate_questions_in_batches(exam_type, topics, difficulty, total_questions)
+        questions = generate_questions(exam_type, topics, difficulty, total_questions)
         # Store questions and the exam type in the session for the exam page to use.
         session["exam_questions"] = questions
         session["exam_type"] = exam_type
@@ -392,7 +438,7 @@ def generate_topic_exam():
         duration = 10
 
     try:
-        questions = generate_questions_in_batches(exam_type, [topic], difficulty, count)
+        questions = generate_questions(exam_type, [topic], difficulty, count)
         session["exam_questions"] = questions
         session["exam_type"] = exam_type
         return jsonify({
@@ -411,43 +457,95 @@ def generate_topic_exam():
 @app.post("/api/score-exam")
 def score_exam():
     payload = request.get_json(silent=True) or {}
-    # The session should be the single source of truth for the questions.
-    # This prevents the client from manipulating the questions and ensures all sections are scored.
-    questions = session.get("exam_questions")
+    questions = session.get("exam_questions") or []
     answers = payload.get("answers") or {}
 
     if not questions:
-        return jsonify({"error": "Exam session not found or expired. Please start a new exam."}), 400
+        return jsonify({
+            "score": 0.0,
+            "totalQuestions": 0,
+            "maxScore": 0.0,
+            "results": [],
+            "performanceByTopic": {},
+            "suggestions": ["No exam questions were found in the session. Please start a new exam."]
+        })
 
-    score = 0
+    score = 0.0
     results = []
+    performance_by_topic = {}
+
     for index, question in enumerate(questions, start=1):
         user_answer = answers.get(str(index - 1))
         correct_answer = question.get("answer")
-        is_correct = user_answer == correct_answer
-        if is_correct:
+        topic = question.get("topic") or "General Banking"
+        sub_topic = question.get("sub_topic") or "General"
+
+        is_correct = None
+        if user_answer:
+            is_correct = user_answer == correct_answer
+
+        if topic not in performance_by_topic:
+            performance_by_topic[topic] = {}
+        if sub_topic not in performance_by_topic[topic]:
+            performance_by_topic[topic][sub_topic] = {"correct": 0, "wrong": 0, "unanswered": 0, "total": 0}
+
+        performance_by_topic[topic][sub_topic]["total"] += 1
+
+        if not user_answer:
+            performance_by_topic[topic][sub_topic]["unanswered"] += 1
+        elif is_correct:
             score += 1
+            performance_by_topic[topic][sub_topic]["correct"] += 1
+        else:
+            score -= 0.5
+            performance_by_topic[topic][sub_topic]["wrong"] += 1
 
         results.append({
             "question": question.get("question"),
-            "topic": question.get("topic") or "General Banking",
+            "topic": topic,
+            "sub_topic": sub_topic,
             "userAnswer": user_answer,
             "correctAnswer": correct_answer,
             "isCorrect": is_correct,
             "options": question.get("options", [])
         })
 
-    total = len(questions)
-    percentage = round((score / total) * 100, 2) if total else 0
-    passed = percentage >= 60
+    suggestions = []
+    for topic, sub_topics in performance_by_topic.items():
+        for sub_topic_name, performance in sub_topics.items():
+            attempted = performance["correct"] + performance["wrong"]
+            if attempted > 0:
+                accuracy = (performance["correct"] / attempted) * 100
+                if accuracy < 70:
+                    suggestions.append(
+                        f"Your accuracy in '{sub_topic_name}' ({topic}) is low ({accuracy:.1f}%). Focus on this area."
+                    )
+            elif performance["unanswered"] > performance["total"] / 2 and performance['total'] > 2:
+                suggestions.append(
+                    f"You skipped many questions in '{sub_topic_name}' ({topic}). Try to build confidence here."
+                )
 
-    return jsonify({
-        "score": score,
-        "total": total,
-        "percentage": percentage,
-        "passed": passed,
-        "results": results
-    })
+    final_score = max(0.0, score)
+
+    exam_result = {
+        "score": final_score,
+        "totalQuestions": len(questions),
+        "maxScore": float(len(questions)),
+        "results": results,
+        "performanceByTopic": performance_by_topic,
+        "suggestions": suggestions,
+        "examType": session.get("exam_type", "Unknown"),
+        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+    exam_history = session.get("exam_history", [])
+    exam_history.append(exam_result)
+    session["exam_history"] = exam_history
+
+    session.pop("exam_questions", None)
+    session.pop("exam_type", None)
+
+    return jsonify(exam_result)
 
 
 @app.errorhandler(404)

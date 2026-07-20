@@ -136,8 +136,8 @@
                         throw new Error(results.error || 'Failed to score exam.');
                     }
 
-                    alert(`Exam Finished!\n\nYour score: ${results.score} out of ${results.total} (${results.percentage}%)`);
-                    window.location.href = '/'; // Redirect to homepage
+                    window.location.href = '/dashboard'; // Redirect to dashboard
+
 
                 } catch (error) {
                     console.error('Error submitting exam:', error);

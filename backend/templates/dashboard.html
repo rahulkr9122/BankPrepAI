@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Your Dashboard - BankPrepAI</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+</head>
+<body>
+  <div class="dashboard-shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Your Performance Report</p>
+        <h1>Exam Dashboard</h1>
+        <p class="hero-copy">Review your past mock test performance and track your progress.</p>
+      </div>
+    </header>
+
+    <main class="app-grid-center">
+      <section class="panel" style="width: 100%; max-width: 800px;">
+        <div class="panel-header">
+          <h2>Your Recent Exams</h2>
+        </div>
+
+        {% if exam_history %}
+          <div class="results">
+            {% for report in exam_history | reverse %}
+              <div class="result-card">
+                <div class="results-header">
+                  <h3>{{ report.examType }}</h3>
+                  <span class="score-badge">Score: {{ report.score }} / {{ report.maxScore }}</span>
+                </div>
+                <p style="color: var(--text-color-light); margin-bottom: 1rem;">Taken on: {{ report.timestamp }}</p>
+                <h4>Topic Performance:</h4>
+                <div class="meta-grid">
+                  {% if report.performanceByTopic is defined %}
+                    {% for topic, sub_topics in report.performanceByTopic.items() %}
+                      <h5 style="margin-top: 1rem; margin-bottom: 0.5rem; color: var(--heading-color);">{{ topic }}</h5>
+                      {% for sub_topic, performance in sub_topics.items() %}
+                        <div style="padding-left: 1rem;">
+                          <span class="topic-tag soft">{{ sub_topic }}</span>
+                          Correct: {{ performance.correct }}, Wrong: {{ performance.wrong }}, Unanswered: {{ performance.unanswered }}
+                        </div>
+                      {% endfor %}
+                    {% endfor %}
+                  {% elif report.topicPerformance is defined %}
+                    {# Fallback for older report format #}
+                    {% for topic, performance in report.topicPerformance.items() %}
+                      <div>
+                        <span class="topic-tag">{{ topic }}</span>
+                        Correct: {{ performance.correct }}, Wrong: {{ performance.wrong }}, Unanswered: {{ performance.unanswered }}
+                      </div>
+                    {% endfor %}
+                  {% endif %}
+                </div>
+                {% if report.suggestions %}
+                  <div class="exam-meta" style="margin-top: 1rem;">
+                      <h4 class="meta-title">Suggestions for Improvement:</h4>
+                      <ul>
+                        {% for suggestion in report.suggestions %}
+                          <li style="color: var(--text-color-light);">{{ suggestion }}</li>
+                        {% endfor %}
+                      </ul>
+                  </div>
+                {% endif %}
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div style="text-align: center; padding: 2rem;">
+            <p>You haven't completed any exams yet.</p>
+            <a href="{{ url_for('index') }}" class="primary-btn">Start a New Exam</a>
+          </div>
+        {% endif %}
+          <div style="text-align: center; margin-top: 2rem;">
+              <a href="{{ url_for('index') }}" class="ghost-btn">Back to Home</a>
+          </div>
+      </section>
+    </main>
+     <footer style="text-align: center; margin-top: 20px; color: var(--text-color-light);">
+      Engineered by Rahul
+    </footer>
+  </div>
+</body>
+</html>

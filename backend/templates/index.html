@@ -22,11 +22,17 @@
           <h2>Start Your Practice Session</h2>
         </div>
 
-        <div class="exam-choice-grid" style="justify-content: center;">
+        <div class="exam-choice-grid" style="display: flex; justify-content: center; gap: 20px; flex-wrap: wrap;">
             <a href="/topic-wise-exam" class="exam-choice-card" style="max-width: 400px; text-align: center;">
                 <h3>Practice by Topic</h3>
                 <p>Choose a specific subject to focus on and strengthen your weak areas.</p>
             </a>
+            {% if has_history %}
+            <a href="/dashboard" class="exam-choice-card" style="max-width: 400px; text-align: center;">
+                <h3>View Dashboard</h3>
+                <p>Check your past exam reports and track your progress.</p>
+            </a>
+            {% endif %}
         </div>
       </section>
     </main>
