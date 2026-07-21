@@ -631,12 +631,24 @@ button:hover {
 }
 
 @media (max-width: 768px) {
+  .dashboard-shell {
+    padding: 20px;
+  }
+
+  .hero {
+    padding: 28px;
+  }
+  
   .hero h1 {
     font-size: clamp(1.8rem, 5vw, 2.5rem);
   }
 
   .hero-copy {
     font-size: 1rem;
+  }
+
+  .panel {
+    padding: 20px;
   }
 
   .panel-header h2 {
@@ -651,6 +663,10 @@ button:hover {
   .exam-choice-grid {
     flex-direction: column;
     gap: 16px;
+  }
+  
+  .exam-choice-card {
+    padding: 24px;
   }
 
   .results-header {
@@ -682,6 +698,7 @@ button:hover {
 @media (max-width: 480px) {
   body {
     padding: 0;
+    font-size: 15px; /* Slightly smaller base font */
   }
   
   .dashboard-shell {
@@ -731,6 +748,28 @@ button:hover {
       padding: 14px 20px;
       font-size: 1rem;
   }
+}
+
+@media (max-width: 360px) {
+    .dashboard-shell {
+        padding: 8px;
+    }
+
+    .hero {
+        padding: 16px;
+    }
+
+    .panel {
+        padding: 12px;
+    }
+
+    .hero h1 {
+        font-size: 1.4rem;
+    }
+
+    .panel-header h2 {
+        font-size: 1.2rem;
+    }
 }
 
 

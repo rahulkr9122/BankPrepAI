@@ -163,6 +163,7 @@
     }
 
     async function generateExam() {
+      document.querySelector('.exam-panel').scrollIntoView({ behavior: 'smooth' });
       statusBox.innerHTML = `
         <div class="loading-container">
             <div class="anim-student">

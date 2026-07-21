@@ -62,6 +62,7 @@ EXAM_LIBRARY = {
     "SBI Clerk": {
         "difficulty": "easy to moderate (clerical-level)",
         "description": "Balanced clerical-level prep for SBI Clerk",
+        "prompt_guidance": "For the Reasoning section, provide 'moderate to hard' questions with complex puzzles. For all other sections, maintain the 'easy to moderate (clerical-level)' difficulty.",
         "sections": [
             {"topic": "English", "questions": 30, "duration": 20},
             {"topic": "Numerical Ability", "questions": 35, "duration": 20},
@@ -71,6 +72,7 @@ EXAM_LIBRARY = {
     "SBI PO": {
         "difficulty": "moderate to high (probationary officer-level)",
         "description": "Higher difficulty sectional mix for SBI PO",
+        "prompt_guidance": "Generate challenging questions appropriate for an officer-level exam. Reasoning puzzles should be complex and require deep logical thinking. Numerical ability questions should involve multiple concepts and tricky calculations. English questions should test subtle grammar nuances.",
         "sections": [
             {"topic": "English", "questions": 30, "duration": 20},
             {"topic": "Numerical Ability", "questions": 35, "duration": 20},
@@ -80,6 +82,7 @@ EXAM_LIBRARY = {
     "IBPS Clerk": {
         "difficulty": "easy to moderate (clerical-level)",
         "description": "Balanced clerical-level prep for IBPS Clerk",
+        "prompt_guidance": "Similar to SBI Clerk. Questions should be direct and test fundamental concepts. Ensure reasoning questions are logically sound but not overly convoluted. Numerical questions should be speed-based.",
         "sections": [
             {"topic": "English", "questions": 30, "duration": 20},
             {"topic": "Numerical Ability", "questions": 35, "duration": 20},
@@ -89,6 +92,7 @@ EXAM_LIBRARY = {
     "IBPS PO": {
         "difficulty": "moderate to high (banking officer-level)",
         "description": "Tougher sectional MCQ prep for IBPS PO",
+        "prompt_guidance": "Focus on application-based questions. Reasoning should include modern puzzle types. Numerical ability should feature complex data interpretation sets. English should test advanced vocabulary and comprehension skills.",
         "sections": [
             {"topic": "English", "questions": 30, "duration": 20},
             {"topic": "Numerical Ability", "questions": 35, "duration": 20},
@@ -98,6 +102,7 @@ EXAM_LIBRARY = {
     "RRB Clerk": {
         "difficulty": "easy to moderate (regional-level clerical)",
         "description": "RRB clerk practice with quantitative and reasoning focus",
+        "prompt_guidance": "Generate questions with a rural and cooperative bank flavor where possible. Focus on speed and accuracy. Reasoning and Numerical Ability are the only sections, so ensure a good spread of sub-topics within them.",
         "sections": [
             {"topic": "Numerical Ability", "questions": 40, "duration": 25},
             {"topic": "Reasoning", "questions": 40, "duration": 25}
@@ -106,6 +111,7 @@ EXAM_LIBRARY = {
     "RRB PO": {
         "difficulty": "moderate to high (regional officer-level)",
         "description": "RRB PO mix emphasizing aptitude and reasoning",
+        "prompt_guidance": "Slightly less difficult than IBPS/SBI PO, but still challenging. Include data interpretation and puzzles relevant to rural banking scenarios if possible. The focus is on problem-solving skills for a regional context.",
         "sections": [
             {"topic": "Numerical Ability", "questions": 40, "duration": 25},
             {"topic": "Reasoning", "questions": 40, "duration": 25}
@@ -215,41 +221,45 @@ def call_groq(prompt):
 
 
 
-def build_prompt(exam_type, topics, difficulty, count):
+def build_prompt(exam_type, topics, difficulty, count, guidance):
     topic_list = ", ".join(topics)
     
     prompt_lines = [
-        f"Generate exactly {count} multiple-choice banking mock test questions for the exam type '{exam_type}'. "
-        f"Required syllabus topics: {topic_list}. "
-        f"Difficulty must match '{difficulty}'. "
-        "The style, format, and complexity of the questions should closely mirror those found in the previous years' question papers for the specified exam. "
-        "Create a completely fresh, fully new question set every time this request is made. "
-        "Do not reuse prior questions, do not repeat the same wording patterns, and do not fall back to any canned bank. "
-        "Ensure that all questions generated in this single response are unique and not duplicates of each other. "
-        "Create a balanced mix of questions distributed across all listed topics. "
+        "You are an expert creator of mock test questions for Indian banking exams. Your task is to generate a high-quality, realistic question paper. "
+        f"Generate exactly {count} multiple-choice questions for the '{exam_type}' exam. "
+        f"The questions must cover these topics: {topic_list}. "
+        f"The overall difficulty must be strictly '{difficulty}'. "
+        "The style, format, and complexity of the questions should closely mirror the last 2-3 years of official papers for this specific exam. "
+        "Crucially, create a completely fresh and new question set. Do not repeat questions or patterns from your training data. Every single question in this response must be unique. "
+        "Distribute the questions evenly across the requested topics. "
     ]
+
+    # Add the new, specific guidance for the exam type
+    if guidance:
+        prompt_lines.append(f"Follow this specific guidance for '{exam_type}': {guidance}. ")
 
     # Add topic-specific instructions
     if "English" in topics:
         prompt_lines.append(
-            "For English questions, generate questions from the following specific sub-topics: reading comprehension, phrase replacement, fill in the blanks, odd sentence out, para jumbles, cloze test, sentence connectors, misspelt words, error detection, word swap, word rearrangement, idioms and phrases, synonyms and antonyms. "
+            "For English, include a mix of: reading comprehension, phrase replacement, fill in the blanks, odd sentence out, para jumbles, cloze test, sentence connectors, misspelt words, error detection, word swap, word rearrangement, idioms/phrases, and synonyms/antonyms. "
         )
     if "Numerical Ability" in topics:
         prompt_lines.append(
-            "For Numerical Ability questions, generate questions from the following specific sub-topics: simplification/approximation, missing series/wrong series, quadratic equation, Data Interpretation (DI), and Arithmetic (including time and work, pipe and cistern, problems with ages, average, ratio and proportion, simple and compound interest, partnership). Questions must require calculation. "
+            "For Numerical Ability, include: simplification/approximation, number series (missing/wrong), quadratic equations, Data Interpretation (DI), and Arithmetic (e.g., time/work, pipes/cisterns, age problems, average, ratio, interest, partnership). All questions must require calculation and logical steps, not just be simple knowledge questions. "
         )
     if "Reasoning" in topics:
         prompt_lines.append(
-            "For Reasoning questions, generate questions from the following specific sub-topics: blood relation, direction and distance, alphanumeric series, syllogism, coding decoding, seating arrangement, inequality, box based puzzle, floor based puzzle, day/month/year/age based puzzle, and linear row/double row arrangement. "
+            "For Reasoning, it is CRITICAL that all questions are logically sound, unambiguous, and have one single correct answer among the options. Double-check your logic. Include a mix of: blood relation, direction/distance, alphanumeric series, syllogism, coding-decoding, seating arrangement, inequality, and puzzles (box, floor, day/month/year, linear row). Ensure puzzles are solvable within a reasonable time for an exam setting. "
         )
 
     prompt_lines.extend([
-        "Use realistic bank exam wording and a clear mix of easy, moderate, and higher-value questions. "
-        "Return raw JSON only, no markdown, no explanation, no headings. "
-        "The JSON structure for each question must be: {\"question\": \"...\", \"options\": [\"...\"], \"answer\": \"...\", \"topic\": \"...\", \"sub_topic\": \"...\"}. "
-        "The 'topic' field must be one of the required syllabus topics. "
-        "For each question, the 'sub_topic' field must be filled with the specific sub-topic it belongs to (e.g., 'reading comprehension', 'seating arrangement', 'data interpretation'). "
-        "Every answer must be exactly one of the option strings, not a number index. "
+        "Return raw JSON only. Do not include markdown, explanations, or any text outside of the JSON structure. "
+        "The JSON must be a single object with a 'questions' key, which is a list of question objects. "
+        "Each question object must have this exact structure: {\"question\": \"...\", \"options\": [\"...\"], \"answer\": \"...\", \"topic\": \"...\", \"sub_topic\": \"...\"}. "
+        "The 'topic' must be one of the required syllabus topics. "
+        "The 'sub_topic' must be the specific area (e.g., 'reading comprehension', 'seating arrangement', 'data interpretation'). "
+        "The 'answer' must be the full text of one of the provided options, not a letter or index. "
+        "Verify that every question is factually correct and that the provided answer is unambiguously the right one. "
     ])
     
     return "".join(prompt_lines)
@@ -257,7 +267,11 @@ def build_prompt(exam_type, topics, difficulty, count):
 
 def generate_questions(exam_type, topics, difficulty, count):
     """Generates the specified number of questions in a single API call, ensuring no duplicates."""
-    prompt = build_prompt(exam_type, topics, difficulty, count)
+    # Get the full config, including our new prompt guidance
+    config = get_exam_config(exam_type)
+    guidance = config.get("prompt_guidance", "") # Get the guidance, or an empty string if it's not there
+
+    prompt = build_prompt(exam_type, topics, difficulty, count, guidance)
     
     questions = call_groq(prompt)
 
