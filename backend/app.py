@@ -6,8 +6,9 @@ import time
 
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 from flask_session import Session
-from groq import Groq
-import groq
+# from groq import Groq
+# import groq
+# import google.generativeai as genai
 import requests
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -38,25 +39,39 @@ Session(app)
 # USE_OLLAMA = str(os.getenv("USE_OLLAMA", "true")).lower() in {"1", "true", "yes", "on"}
 # OLLAMA_TEMPERATURE = float(os.getenv("OLLAMA_TEMPERATURE", "0.8"))
 
-# GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-# GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-pro")
-# USE_GEMINI = str(os.getenv("USE_GEMINI", "true")).lower() in {"1", "true", "yes", "on"}
-# GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# # GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 # Load multiple Groq API keys for load balancing
-GROQ_API_KEYS_STR = os.getenv("GROQ_API_KEYS", "")
-GROQ_API_KEYS = [key.strip() for key in GROQ_API_KEYS_STR.split(',') if key.strip()]
+# GROQ_API_KEYS_STR = os.getenv("GROQ_API_KEYS", "")
+# GROQ_API_KEYS = [key.strip() for key in GROQ_API_KEYS_STR.split(',') if key.strip()]
 
-if not GROQ_API_KEYS:
+# if not GROQ_API_KEYS:
+#     # Fallback to the single key environment variable for backward compatibility
+#     single_key = os.getenv("GROQ_API_KEY")
+#     if single_key:
+#         GROQ_API_KEYS.append(single_key)
+
+# if not GROQ_API_KEYS:
+#     app.logger.warning("No Groq API keys found. Please set `GROQ_API_KEYS` in your .env file as a comma-separated string.")
+
+# GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+# USE_GROQ = str(os.getenv("USE_GROQ", "true")).lower() in {"1", "true", "yes", "on"}
+
+# Gemini API Keys for load balancing
+GEMINI_API_KEYS_STR = os.getenv("GEMINI_API_KEYS", "")
+GEMINI_API_KEYS = [key.strip() for key in GEMINI_API_KEYS_STR.split(',') if key.strip()]
+
+if not GEMINI_API_KEYS:
     # Fallback to the single key environment variable for backward compatibility
-    single_key = os.getenv("GROQ_API_KEY")
+    single_key = os.getenv("GEMINI_API_KEY")
     if single_key:
-        GROQ_API_KEYS.append(single_key)
+        GEMINI_API_KEYS.append(single_key)
 
-if not GROQ_API_KEYS:
-    app.logger.warning("No Groq API keys found. Please set `GROQ_API_KEYS` in your .env file as a comma-separated string.")
+if not GEMINI_API_KEYS:
+    app.logger.warning("No Gemini API keys found. Please set `GEMINI_API_KEYS` or `GEMINI_API_KEY` in your .env file.")
 
-GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
-USE_GROQ = str(os.getenv("USE_GROQ", "true")).lower() in {"1", "true", "yes", "on"}
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+USE_GEMINI = True  # Default to using Gemini
+
 
 EXAM_LIBRARY = {
     "SBI Clerk": {
@@ -126,6 +141,9 @@ def extract_and_normalize_questions(json_string):
     normalizes the structure, and returns a list of question dicts.
     """
     try:
+        # Gemini may return markdown ```json ... ```, so we extract it.
+        if "```json" in json_string:
+            json_string = json_string[json_string.find("```json") + 7:json_string.rfind("```")]
         parsed = json.loads(json_string)
     except json.JSONDecodeError as exc:
         raise ValueError(f"Failed to decode JSON: {exc}") from exc
@@ -166,72 +184,67 @@ def extract_and_normalize_questions(json_string):
     return normalized
 
 
+def call_gemini(prompt):
+    if not GEMINI_API_KEYS:
+        raise ValueError("GEMINI_API_KEYS are not set. Please add them to your .env file.")
 
-def call_groq(prompt):
-    if not GROQ_API_KEYS:
-        raise ValueError("GROQ_API_KEYS are not set. Please add them to your .env file.")
-
-    start_key_index = session.get("groq_key_index", 0)
+    start_key_index = session.get("gemini_key_index", 0)
     
-    for i in range(len(GROQ_API_KEYS)):
-        key_index = (start_key_index + i) % len(GROQ_API_KEYS)
-        current_key = GROQ_API_KEYS[key_index]
+    for i in range(len(GEMINI_API_KEYS)):
+        key_index = (start_key_index + i) % len(GEMINI_API_KEYS)
+        current_key = GEMINI_API_KEYS[key_index]
         
-        app.logger.info(f"Using Groq API key with index: {key_index}")
-        client = Groq(api_key=current_key, timeout=180.0)
+        app.logger.info(f"Using Gemini API key with index: {key_index}")
+        
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={current_key}"
+        
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.2,
+                "candidateCount": 1,
+                "response_mime_type": "application/json",
+            }
+        }
 
-        # Inner loop for retrying on JSON validation errors
         for attempt in range(3):
             try:
-                chat_completion = client.chat.completions.create(
-                    messages=[{"role": "user", "content": prompt}],
-                    model=GROQ_MODEL,
-                    response_format={"type": "json_object"},
-                    temperature=0.2,
-                )
-                raw_text = chat_completion.choices[0].message.content
-                session["groq_key_index"] = key_index
+                response = requests.post(url, json=payload, timeout=180)
+                response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+                
+                raw_text = response.json()['candidates'][0]['content']['parts'][0]['text']
+                session["gemini_key_index"] = key_index
                 return extract_and_normalize_questions(raw_text)
 
-            except groq.BadRequestError as e:
-                if "json_validate_failed" in str(e):
-                    app.logger.warning(f"Groq JSON validation failed on attempt {attempt + 1} with key index {key_index}. Retrying prompt.")
-                    prompt += "\nReminder: The output must be a single, valid JSON object and nothing else."
-                    time.sleep(1)  # Small delay before retry
-                    continue  # Retry with same key, modified prompt
-                
-                app.logger.error(f"Groq BadRequestError with key at index {key_index}: {e}. Switching key.")
-                break  # Break from inner loop to switch key
-
-            except groq.AuthenticationError:
-                app.logger.warning(f"Groq API key at index {key_index} failed authentication. Switching to the next key.")
-                break  # Break from inner loop to switch key
-
-            except groq.RateLimitError:
-                app.logger.warning(f"Groq API key at index {key_index} is rate-limited. Switching to the next key.")
-                break  # Break from inner loop to switch key
-
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 429: # Rate limit error
+                    app.logger.warning(f"Gemini API key at index {key_index} is rate-limited. Switching to the next key.")
+                    break # Switch key
+                elif e.response.status_code in [400, 403]: # Bad request or permission error, likely bad key
+                    app.logger.warning(f"Gemini API key at index {key_index} failed with status {e.response.status_code}. Switching key. Error: {e.response.text}")
+                    break # Switch key
+                else:
+                    app.logger.error(f"An HTTP error occurred with key at index {key_index}: {e}. Retrying...")
+                    time.sleep(1) # a short delay before retrying
+                    continue # Retry with same key
             except Exception as exc:
                 app.logger.error(f"An unexpected error occurred with key at index {key_index}: {exc}. Switching key.")
-                break  # Break from inner loop to switch key
+                break  # Switch key
     
-    # If we exit the loops, it means all keys and retries have failed.
-    raise RuntimeError("Groq API call failed for all available keys and retries.")
-
-
+    raise RuntimeError("Gemini API call failed for all available keys and retries.")
 
 
 def build_prompt(exam_type, topics, difficulty, count, guidance):
     topic_list = ", ".join(topics)
     
     prompt_lines = [
-        "You are an expert creator of mock test questions for Indian banking exams. Your task is to generate a high-quality, realistic question paper. "
-        f"Generate exactly {count} multiple-choice questions for the '{exam_type}' exam. "
-        f"The questions must cover these topics: {topic_list}. "
-        f"The overall difficulty must be strictly '{difficulty}'. "
-        "The style, format, and complexity of the questions should closely mirror the last 2-3 years of official papers for this specific exam. "
-        "Crucially, create a completely fresh and new question set. Do not repeat questions or patterns from your training data. Every single question in this response must be unique. "
-        "Distribute the questions evenly across the requested topics. "
+        f"""You are an expert creator of mock test questions for Indian banking exams. Your task is to generate a high-quality, realistic question paper. 
+Generate exactly {count} multiple-choice questions for the '{exam_type}' exam. 
+The questions must cover these topics: {topic_list}. 
+The overall difficulty must be strictly '{difficulty}'. 
+The style, format, and complexity of the questions should closely mirror the last 2-3 years of official papers for this specific exam. 
+Crucially, create a completely fresh and new question set. Do not repeat questions or patterns from your training data. Every single question in this response must be unique. 
+Distribute the questions evenly across the requested topics. """
     ]
 
     # Add the new, specific guidance for the exam type
@@ -252,33 +265,31 @@ def build_prompt(exam_type, topics, difficulty, count, guidance):
             "For Reasoning, it is CRITICAL that all questions are logically sound, unambiguous, and have one single correct answer among the options. Double-check your logic. Include a mix of: blood relation, direction/distance, alphanumeric series, syllogism, coding-decoding, seating arrangement, inequality, and puzzles (box, floor, day/month/year, linear row). Ensure puzzles are solvable within a reasonable time for an exam setting. "
         )
 
-    prompt_lines.extend([
-        "Return raw JSON only. Do not include markdown, explanations, or any text outside of the JSON structure. "
-        "The JSON must be a single object with a 'questions' key, which is a list of question objects. "
-        "Each question object must have this exact structure: {\"question\": \"...\", \"options\": [\"...\"], \"answer\": \"...\", \"topic\": \"...\", \"sub_topic\": \"...\"}. "
-        "The 'topic' must be one of the required syllabus topics. "
-        "The 'sub_topic' must be the specific area (e.g., 'reading comprehension', 'seating arrangement', 'data interpretation'). "
-        "The 'answer' must be the full text of one of the provided options, not a letter or index. "
-        "Verify that every question is factually correct and that the provided answer is unambiguously the right one. "
-    ])
+    prompt_lines.append(
+        """Return raw JSON only. Do not include markdown, explanations, or any text outside of the JSON structure. 
+The JSON must be a single object with a 'questions' key, which is a list of question objects. 
+Each question object must have this exact structure: {"question": "...", "options": ["..."], "answer": "...", "topic": "...", "sub_topic": "..."}. 
+The 'topic' must be one of the required syllabus topics. 
+The 'sub_topic' must be the specific area (e.g., 'reading comprehension', 'seating arrangement', 'data interpretation'). 
+The 'answer' must be the full text of one of the provided options, not a letter or index. 
+Verify that every question is factually correct and that the provided answer is unambiguously the right one. """
+    )
     
     return "".join(prompt_lines)
 
 
 def generate_questions(exam_type, topics, difficulty, count):
     """Generates the specified number of questions in a single API call, ensuring no duplicates."""
-    # Get the full config, including our new prompt guidance
     config = get_exam_config(exam_type)
-    guidance = config.get("prompt_guidance", "") # Get the guidance, or an empty string if it's not there
+    guidance = config.get("prompt_guidance", "")
 
     prompt = build_prompt(exam_type, topics, difficulty, count, guidance)
     
-    questions = call_groq(prompt)
+    questions = call_gemini(prompt)
 
     if not questions:
-        raise RuntimeError("Groq API returned no questions.")
+        raise RuntimeError("API returned no questions.")
 
-    # Deduplicate questions based on the question text to prevent repeats.
     unique_questions = []
     seen_questions = set()
     for q in questions:
@@ -289,7 +300,6 @@ def generate_questions(exam_type, topics, difficulty, count):
     
     questions = unique_questions
 
-    # Log a warning if the AI returns fewer questions than requested after deduplication.
     if len(questions) < count:
         app.logger.warning(f"AI returned fewer questions ({len(questions)}) than requested ({count}) after deduplication.")
     
@@ -327,7 +337,6 @@ def exam():
     exam_type = session.get("exam_type")
 
     if not questions or not exam_type:
-        # If there's no exam in the session, redirect to the homepage.
         return redirect(url_for("index"))
 
     config = get_exam_config(exam_type)
@@ -337,37 +346,38 @@ def exam():
 
 @app.get("/api/health")
 def health():
-    groq_status = "down"
-    groq_error = None
+    gemini_status = "down"
+    gemini_error = None
     model_found = False
-
-    if not GROQ_API_KEYS:
-        groq_error = "GROQ_API_KEYS is not set in the environment."
+    if not GEMINI_API_KEYS:
+        gemini_error = "GEMINI_API_KEYS is not set in the environment."
     else:
         try:
             # Use the first key for the health check
-            client = Groq(api_key=GROQ_API_KEYS[0], timeout=30.0)
-            # A simple chat completion to verify connection and model
-            _ = client.chat.completions.create(
-                messages=[{"role": "user", "content": "ping"}],
-                model=GROQ_MODEL,
-            )
-            groq_status = "ok"
+            current_key = GEMINI_API_KEYS[0]
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={current_key}"
+            payload = {"contents": [{"parts": [{"text": "ping"}]}]}
+            response = requests.post(url, json=payload, timeout=30)
+            response.raise_for_status()
+            
+            gemini_status = "ok"
             model_found = True
-            groq_error = "Groq API is running and the model is available."
+            gemini_error = "Gemini API is running and the model is available."
+        except requests.exceptions.HTTPError as e:
+             if "model not found" in e.response.text.lower():
+                gemini_error = f"Model '{GEMINI_MODEL}' not found. Please check the GEMINI_MODEL name in your .env file or app.py."
+             else:
+                gemini_error = f"Gemini API connection failed: {e}"
         except Exception as e:
-            if "model not found" in str(e).lower():
-                groq_error = f"Model '{GROQ_MODEL}' not found. Please check the GROQ_MODEL name in your .env file or app.py. Valid models include 'llama3-8b-8192' and 'mixtral-8x7b-32768'."
-            else:
-                groq_error = f"Groq API connection failed: {e}"
+            gemini_error = f"Gemini API connection failed: {e}"
 
     return jsonify({
         "status": "ok",
         "app": "BankPrepAI",
-        "groq_details": {
-            "status": groq_status,
+        "gemini_details": {
+            "status": gemini_status,
             "model_found": model_found,
-            "message": groq_error
+            "message": gemini_error
         }
     })
 
@@ -398,7 +408,7 @@ def generate_exam():
     payload = request.get_json(silent=True) or {}
     exam_type = payload.get("examType")
     app.logger.info(f"Exam type from payload: {exam_type}")
-    app.logger.info(f"Using Groq model: '{GROQ_MODEL}'")
+    app.logger.info(f"Using Gemini model: '{GEMINI_MODEL}'")
 
     if not exam_type:
         app.logger.warning("examType is missing from payload, returning 400.")
@@ -416,11 +426,8 @@ def generate_exam():
 
     try:
         questions = generate_questions(exam_type, topics, difficulty, total_questions)
-        # Store questions and the exam type in the session for the exam page to use.
         session["exam_questions"] = questions
         session["exam_type"] = exam_type
-        # Respond with a URL to redirect the user to the exam page.
-        # The frontend will handle the redirection.
         return jsonify({"message": "Exam generated successfully.", "redirectUrl": url_for("exam")})
     except Exception as e:
         app.logger.error(f"Error generating questions for exam '{exam_type}': {e}", exc_info=True)
