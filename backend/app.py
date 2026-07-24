@@ -41,7 +41,7 @@ if not GEMINI_API_KEYS:
 if not GEMINI_API_KEYS:
     app.logger.warning("No Gemini API keys found. Please set `GEMINI_API_KEYS` or `GEMINI_API_KEY` in your .env file.")
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-pro")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 USE_GEMINI = True
 
 EXAM_LIBRARY = {
