@@ -172,7 +172,7 @@ def call_gemini(prompt):
 
         for attempt in range(3):
             try:
-                response = requests.post(url, json=payload, timeout=180)
+                response = requests.post(url, json=payload, timeout=45)
                 response.raise_for_status()
 
                 content_type = response.headers.get('Content-Type', '')
@@ -198,6 +198,10 @@ def call_gemini(prompt):
                 session["gemini_key_index"] = key_index
                 return extract_and_normalize_questions(raw_text)
 
+            except requests.exceptions.Timeout:
+                app.logger.warning(f"Request timed out for key at index {key_index} on attempt {attempt + 1}. Retrying after a short delay.")
+                time.sleep(1)
+                continue
             except requests.exceptions.HTTPError as e:
                 if e.response.status_code == 429:
                     wait_time = 2 ** attempt
