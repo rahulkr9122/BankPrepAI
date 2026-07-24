@@ -146,7 +146,7 @@ def extract_and_normalize_questions(json_string):
             json_string = json_string[json_string.find("```json") + 7:json_string.rfind("```")]
         parsed = json.loads(json_string)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"Failed to decode JSON: {exc}") from exc
+        raise ValueError(f"Failed to decode JSON: {exc}. Original string was: {json_string}") from exc
 
     if isinstance(parsed, dict):
         if isinstance(parsed.get("questions"), list):
@@ -211,7 +211,13 @@ def call_gemini(prompt):
             try:
                 response = requests.post(url, json=payload, timeout=180)
                 response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
-                
+
+                content_type = response.headers.get('Content-Type', '')
+                if 'application/json' not in content_type:
+                    app.logger.error(f"Gemini API returned non-JSON response for key index {key_index}. "
+                                     f"Content-Type: {content_type}. Response body: {response.text[:500]}")
+                    break # Switch key, as this might be a block page or captcha
+
                 raw_text = response.json()['candidates'][0]['content']['parts'][0]['text']
                 session["gemini_key_index"] = key_index
                 return extract_and_normalize_questions(raw_text)
