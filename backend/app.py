@@ -239,17 +239,21 @@ Verify that every question is factually correct and that the provided answer is 
 def generate_questions(exam_type, topics, difficulty, count):
     config = get_exam_config(exam_type)
     guidance = config.get("prompt_guidance", "")
-    
+
+    # Over-request to account for deduplication
+    buffer_factor = 1.2
+    target_count = int(count * buffer_factor)
+
     all_questions = []
     batch_size = 12
-    remaining_questions = count
+    remaining_questions = target_count
 
     while remaining_questions > 0:
         current_batch_size = min(batch_size, remaining_questions)
         app.logger.info(f"Generating a batch of {current_batch_size} questions...")
-        
+
         prompt = build_prompt(exam_type, topics, difficulty, current_batch_size, guidance)
-        
+
         try:
             questions_batch = call_gemini(prompt)
             if questions_batch:
@@ -263,7 +267,7 @@ def generate_questions(exam_type, topics, difficulty, count):
             pass
 
         remaining_questions -= current_batch_size
-        
+
         if remaining_questions > 0:
             app.logger.info("Waiting for 2 seconds before next API call...")
             time.sleep(2)
@@ -278,11 +282,13 @@ def generate_questions(exam_type, topics, difficulty, count):
         if question_text and question_text not in seen_questions:
             unique_questions.append(q)
             seen_questions.add(question_text)
-    
+
     questions = unique_questions
     if len(questions) < count:
-        app.logger.warning(f"AI returned fewer questions ({len(questions)}) than requested ({count}) after deduplication.")
-    
+        app.logger.warning(
+            f"AI returned {len(questions)} unique questions, which is less than the requested {count}, even after attempting to generate {target_count}."
+        )
+
     return questions[:count]
 
 
