@@ -170,66 +170,56 @@ def call_gemini(prompt):
             }
         }
 
-        for attempt in range(3):
+        # We try each key only once to fail faster and avoid Gunicorn timeouts.
+        # Retries for the same key are disabled in favor of quickly cycling to the next available key.
+        try:
+            # Setting a generous 60-second timeout for the API call itself.
+            response = requests.post(url, json=payload, timeout=60)
+            response.raise_for_status()
+
+            content_type = response.headers.get('Content-Type', '')
+            if 'application/json' not in content_type:
+                raise NonJsonResponseError(
+                    f"Gemini API returned non-JSON response for key index {key_index}. Content-Type: {content_type}",
+                    response.text
+                )
+
+            json_response = response.json()
+            
+            if 'error' in json_response:
+                error_message = json_response['error'].get('message', 'Unknown error')
+                # Log the error and move to the next key.
+                app.logger.error(f"Gemini API returned an error for key index {key_index}: {error_message}")
+                continue # Go to the next key
+
             try:
-                response = requests.post(url, json=payload, timeout=45)
-                response.raise_for_status()
+                raw_text = json_response['candidates'][0]['content']['parts'][0]['text']
+            except (KeyError, IndexError, TypeError) as e:
+                app.logger.error(f"Failed to parse Gemini response structure for key index {key_index}. Error: {e}. Response: {json_response}")
+                continue # Go to the next key
 
-                content_type = response.headers.get('Content-Type', '')
-                if 'application/json' not in content_type:
-                    raise NonJsonResponseError(
-                        f"Gemini API returned non-JSON response for key index {key_index}. Content-Type: {content_type}",
-                        response.text
-                    )
+            # If successful, update the key index and return the questions.
+            session["gemini_key_index"] = key_index
+            return extract_and_normalize_questions(raw_text)
 
-                json_response = response.json()
-                
-                if 'error' in json_response:
-                    error_message = json_response['error'].get('message', 'Unknown error')
-                    app.logger.error(f"Gemini API returned an error for key index {key_index}: {error_message}")
-                    break
-
-                try:
-                    raw_text = json_response['candidates'][0]['content']['parts'][0]['text']
-                except (KeyError, IndexError, TypeError) as e:
-                    app.logger.error(f"Failed to parse Gemini response structure for key index {key_index}. Error: {e}. Response: {json_response}")
-                    break
-
-                session["gemini_key_index"] = key_index
-                return extract_and_normalize_questions(raw_text)
-
-            except requests.exceptions.Timeout:
-                app.logger.warning(f"Request timed out for key at index {key_index} on attempt {attempt + 1}. Retrying after a short delay.")
-                time.sleep(1)
-                continue
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 429:
-                    wait_time = 2 ** attempt
-                    app.logger.warning(
-                        f"Gemini API key at index {key_index} is rate-limited (attempt {attempt + 1}). "
-                        f"Waiting for {wait_time} seconds before retrying."
-                    )
-                    time.sleep(wait_time)
-                    continue
-                elif e.response.status_code in [400, 403]:
-                    app.logger.warning(f"Gemini API key at index {key_index} failed with status {e.response.status_code}. Switching key. Error: {e.response.text}")
-                    break
-                else:
-                    app.logger.error(f"An HTTP error occurred with key at index {key_index}: {e}. Retrying...")
-                    time.sleep(1)
-                    continue
-            except ValueError as e:
-                if "Failed to decode JSON" in str(e):
-                    app.logger.warning(f"Gemini JSON validation failed on attempt {attempt + 1} with key index {key_index}. Retrying prompt. Error: {e}")
-                    prompt += "Reminder: The output must be a single, valid JSON object and nothing else. Do not include any text outside of the JSON structure."
-                    time.sleep(1)
-                    continue
-                else:
-                    app.logger.error(f"A ValueError occurred with key at index {key_index}: {e}. Switching key.")
-                    break
-            except Exception as exc:
-                app.logger.error(f"An unexpected error occurred with key at index {key_index}: {exc}. Switching key.")
-                break
+        except requests.exceptions.Timeout:
+            app.logger.warning(f"Request timed out for key at index {key_index}. Switching to next key.")
+            continue # Go to the next key
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 429:
+                app.logger.warning(f"Gemini API key at index {key_index} is rate-limited. Switching to next key.")
+            elif e.response.status_code in [400, 403]:
+                app.logger.warning(f"Gemini API key at index {key_index} failed with status {e.response.status_code}. Switching key. Error: {e.response.text}")
+            else:
+                app.logger.error(f"An HTTP error occurred with key at index {key_index}: {e}. Switching key.")
+            continue # Go to the next key
+        except ValueError as e:
+            # This handles JSON decoding errors or other value-related issues.
+            app.logger.error(f"A ValueError occurred with key at index {key_index}: {e}. Switching key.")
+            continue # Go to the next key
+        except Exception as exc:
+            app.logger.error(f"An unexpected error occurred with key at index {key_index}: {exc}. Switching key.")
+            continue # Go to the next key
     
     raise RuntimeError("Gemini API call failed for all available keys and retries.")
 
