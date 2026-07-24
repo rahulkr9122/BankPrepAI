@@ -227,6 +227,15 @@ def call_gemini(prompt):
                     app.logger.error(f"An HTTP error occurred with key at index {key_index}: {e}. Retrying...")
                     time.sleep(1) # a short delay before retrying
                     continue # Retry with same key
+            except ValueError as e:
+                if "Failed to decode JSON" in str(e):
+                    app.logger.warning(f"Gemini JSON validation failed on attempt {attempt + 1} with key index {key_index}. Retrying prompt. Error: {e}")
+                    prompt += "\nReminder: The output must be a single, valid JSON object and nothing else. Do not include any text outside of the JSON structure."
+                    time.sleep(1)
+                    continue # Retry with same key, modified prompt
+                else:
+                    app.logger.error(f"A ValueError occurred with key at index {key_index}: {e}. Switching key.")
+                    break # Other ValueError, switch key
             except Exception as exc:
                 app.logger.error(f"An unexpected error occurred with key at index {key_index}: {exc}. Switching key.")
                 break  # Switch key
