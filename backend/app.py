@@ -265,8 +265,8 @@ def generate_questions(exam_type, topics, difficulty, count):
         remaining_questions -= current_batch_size
         
         if remaining_questions > 0:
-            app.logger.info("Waiting for 15 seconds before next API call...")
-            time.sleep(15)
+            app.logger.info("Waiting for 2 seconds before next API call...")
+            time.sleep(2)
 
     if not all_questions:
         raise RuntimeError("API returned no questions for any batch.")
