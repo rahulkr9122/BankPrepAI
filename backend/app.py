@@ -200,8 +200,13 @@ def call_gemini(prompt):
 
             except requests.exceptions.HTTPError as e:
                 if e.response.status_code == 429:
-                    app.logger.warning(f"Gemini API key at index {key_index} is rate-limited. Switching to the next key.")
-                    break
+                    wait_time = 2 ** attempt
+                    app.logger.warning(
+                        f"Gemini API key at index {key_index} is rate-limited (attempt {attempt + 1}). "
+                        f"Waiting for {wait_time} seconds before retrying."
+                    )
+                    time.sleep(wait_time)
+                    continue
                 elif e.response.status_code in [400, 403]:
                     app.logger.warning(f"Gemini API key at index {key_index} failed with status {e.response.status_code}. Switching key. Error: {e.response.text}")
                     break
