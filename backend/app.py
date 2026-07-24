@@ -218,7 +218,19 @@ def call_gemini(prompt):
                                      f"Content-Type: {content_type}. Response body: {response.text[:500]}")
                     break # Switch key, as this might be a block page or captcha
 
-                raw_text = response.json()['candidates'][0]['content']['parts'][0]['text']
+                json_response = response.json()
+                
+                if 'error' in json_response:
+                    error_message = json_response['error'].get('message', 'Unknown error')
+                    app.logger.error(f"Gemini API returned an error for key index {key_index}: {error_message}")
+                    break
+
+                try:
+                    raw_text = json_response['candidates'][0]['content']['parts'][0]['text']
+                except (KeyError, IndexError, TypeError) as e:
+                    app.logger.error(f"Failed to parse Gemini response structure for key index {key_index}. Error: {e}. Response: {json_response}")
+                    break
+
                 session["gemini_key_index"] = key_index
                 return extract_and_normalize_questions(raw_text)
 
