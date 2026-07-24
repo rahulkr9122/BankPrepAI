@@ -6,9 +6,6 @@ import time
 
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 from flask_session import Session
-# from groq import Groq
-# import groq
-# import google.generativeai as genai
 import requests
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -18,11 +15,6 @@ load_dotenv()
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "bankprepai-secret")
 
-# Configure server-side sessions.
-# This stores session data on the server's filesystem instead of in browser cookies,
-# which is necessary because the list of exam questions can be larger than
-# the browser's cookie size limit (around 4KB). Storing it on the server
-# avoids this limitation and prevents the application from crashing.
 SESSION_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'flask_session')
 os.makedirs(SESSION_DIR, exist_ok=True)
 app.config["SESSION_TYPE"] = "filesystem"
@@ -32,36 +24,16 @@ app.config["SESSION_PERMANENT"] = False
 CORS(app)
 Session(app)
 
-# OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
-# DEFAULT_MODEL = os.getenv("OLLAMA_MODEL", "minimax-m3:cloud")
-# OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "120"))
-# QUESTION_BATCH_SIZE = int(os.getenv("QUESTION_BATCH_SIZE", "10"))
-# USE_OLLAMA = str(os.getenv("USE_OLLAMA", "true")).lower() in {"1", "true", "yes", "on"}
-# OLLAMA_TEMPERATURE = float(os.getenv("OLLAMA_TEMPERATURE", "0.8"))
-
-# # GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-# Load multiple Groq API keys for load balancing
-# GROQ_API_KEYS_STR = os.getenv("GROQ_API_KEYS", "")
-# GROQ_API_KEYS = [key.strip() for key in GROQ_API_KEYS_STR.split(',') if key.strip()]
-
-# if not GROQ_API_KEYS:
-#     # Fallback to the single key environment variable for backward compatibility
-#     single_key = os.getenv("GROQ_API_KEY")
-#     if single_key:
-#         GROQ_API_KEYS.append(single_key)
-
-# if not GROQ_API_KEYS:
-#     app.logger.warning("No Groq API keys found. Please set `GROQ_API_KEYS` in your .env file as a comma-separated string.")
-
-# GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
-# USE_GROQ = str(os.getenv("USE_GROQ", "true")).lower() in {"1", "true", "yes", "on"}
+class NonJsonResponseError(Exception):
+    def __init__(self, message, content):
+        super().__init__(message)
+        self.content = content
 
 # Gemini API Keys for load balancing
 GEMINI_API_KEYS_STR = os.getenv("GEMINI_API_KEYS", "")
 GEMINI_API_KEYS = [key.strip() for key in GEMINI_API_KEYS_STR.split(',') if key.strip()]
 
 if not GEMINI_API_KEYS:
-    # Fallback to the single key environment variable for backward compatibility
     single_key = os.getenv("GEMINI_API_KEY")
     if single_key:
         GEMINI_API_KEYS.append(single_key)
@@ -69,9 +41,8 @@ if not GEMINI_API_KEYS:
 if not GEMINI_API_KEYS:
     app.logger.warning("No Gemini API keys found. Please set `GEMINI_API_KEYS` or `GEMINI_API_KEY` in your .env file.")
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
-USE_GEMINI = True  # Default to using Gemini
-
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-pro")
+USE_GEMINI = True
 
 EXAM_LIBRARY = {
     "SBI Clerk": {
@@ -136,12 +107,7 @@ EXAM_LIBRARY = {
 
 
 def extract_and_normalize_questions(json_string):
-    """
-    Parses a JSON string that is expected to contain questions,
-    normalizes the structure, and returns a list of question dicts.
-    """
     try:
-        # Gemini may return markdown ```json ... ```, so we extract it.
         if "```json" in json_string:
             json_string = json_string[json_string.find("```json") + 7:json_string.rfind("```")]
         parsed = json.loads(json_string)
@@ -152,7 +118,6 @@ def extract_and_normalize_questions(json_string):
         if isinstance(parsed.get("questions"), list):
             question_list = parsed["questions"]
         elif all(key in parsed for key in ("question", "options", "answer")):
-            # Handle case where it returns a single question object
             question_list = [parsed]
         else:
             raise ValueError("JSON object does not contain a 'questions' list or is not a single question object.")
@@ -164,11 +129,10 @@ def extract_and_normalize_questions(json_string):
     normalized = []
     for item in question_list:
         if not isinstance(item, dict):
-            continue  # Skip malformed items
+            continue
 
         options = item.get("options") or []
         answer = item.get("answer")
-        # Normalize answer if it's an index
         if answer not in options and isinstance(answer, int):
             if 0 <= answer < len(options):
                 answer = options[answer]
@@ -180,7 +144,6 @@ def extract_and_normalize_questions(json_string):
             "topic": item.get("topic") or "General Banking",
             "sub_topic": item.get("sub_topic") or "General",
         })
-
     return normalized
 
 
@@ -210,13 +173,14 @@ def call_gemini(prompt):
         for attempt in range(3):
             try:
                 response = requests.post(url, json=payload, timeout=180)
-                response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+                response.raise_for_status()
 
                 content_type = response.headers.get('Content-Type', '')
                 if 'application/json' not in content_type:
-                    app.logger.error(f"Gemini API returned non-JSON response for key index {key_index}. "
-                                     f"Content-Type: {content_type}. Response body: {response.text[:500]}")
-                    break # Switch key, as this might be a block page or captcha
+                    raise NonJsonResponseError(
+                        f"Gemini API returned non-JSON response for key index {key_index}. Content-Type: {content_type}",
+                        response.text
+                    )
 
                 json_response = response.json()
                 
@@ -235,28 +199,28 @@ def call_gemini(prompt):
                 return extract_and_normalize_questions(raw_text)
 
             except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 429: # Rate limit error
+                if e.response.status_code == 429:
                     app.logger.warning(f"Gemini API key at index {key_index} is rate-limited. Switching to the next key.")
-                    break # Switch key
-                elif e.response.status_code in [400, 403]: # Bad request or permission error, likely bad key
+                    break
+                elif e.response.status_code in [400, 403]:
                     app.logger.warning(f"Gemini API key at index {key_index} failed with status {e.response.status_code}. Switching key. Error: {e.response.text}")
-                    break # Switch key
+                    break
                 else:
                     app.logger.error(f"An HTTP error occurred with key at index {key_index}: {e}. Retrying...")
-                    time.sleep(1) # a short delay before retrying
-                    continue # Retry with same key
+                    time.sleep(1)
+                    continue
             except ValueError as e:
                 if "Failed to decode JSON" in str(e):
                     app.logger.warning(f"Gemini JSON validation failed on attempt {attempt + 1} with key index {key_index}. Retrying prompt. Error: {e}")
-                    prompt += "\nReminder: The output must be a single, valid JSON object and nothing else. Do not include any text outside of the JSON structure."
+                    prompt += "Reminder: The output must be a single, valid JSON object and nothing else. Do not include any text outside of the JSON structure."
                     time.sleep(1)
-                    continue # Retry with same key, modified prompt
+                    continue
                 else:
                     app.logger.error(f"A ValueError occurred with key at index {key_index}: {e}. Switching key.")
-                    break # Other ValueError, switch key
+                    break
             except Exception as exc:
                 app.logger.error(f"An unexpected error occurred with key at index {key_index}: {exc}. Switching key.")
-                break  # Switch key
+                break
     
     raise RuntimeError("Gemini API call failed for all available keys and retries.")
 
@@ -274,11 +238,9 @@ Crucially, create a completely fresh and new question set. Do not repeat questio
 Distribute the questions evenly across the requested topics. """
     ]
 
-    # Add the new, specific guidance for the exam type
     if guidance:
         prompt_lines.append(f"Follow this specific guidance for '{exam_type}': {guidance}. ")
 
-    # Add topic-specific instructions
     if "English" in topics:
         prompt_lines.append(
             "For English, include a mix of: reading comprehension, phrase replacement, fill in the blanks, odd sentence out, para jumbles, cloze test, sentence connectors, misspelt words, error detection, word swap, word rearrangement, idioms/phrases, and synonyms/antonyms. "
@@ -306,14 +268,10 @@ Verify that every question is factually correct and that the provided answer is 
 
 
 def generate_questions(exam_type, topics, difficulty, count):
-    """Generates the specified number of questions in a single API call, ensuring no duplicates."""
     config = get_exam_config(exam_type)
     guidance = config.get("prompt_guidance", "")
-
     prompt = build_prompt(exam_type, topics, difficulty, count, guidance)
-    
     questions = call_gemini(prompt)
-
     if not questions:
         raise RuntimeError("API returned no questions.")
 
@@ -326,7 +284,6 @@ def generate_questions(exam_type, topics, difficulty, count):
             seen_questions.add(question_text)
     
     questions = unique_questions
-
     if len(questions) < count:
         app.logger.warning(f"AI returned fewer questions ({len(questions)}) than requested ({count}) after deduplication.")
     
@@ -359,13 +316,10 @@ def topic_wise_exam():
 
 @app.get("/exam")
 def exam():
-    """Renders the main exam interface page."""
     questions = session.get("exam_questions")
     exam_type = session.get("exam_type")
-
     if not questions or not exam_type:
         return redirect(url_for("index"))
-
     config = get_exam_config(exam_type)
     total_duration = sum(section.get("duration", 20) for section in config.get("sections", []))
     return render_template("exam.html", questions=questions, exam_type=exam_type, total_duration=total_duration)
@@ -380,7 +334,6 @@ def health():
         gemini_error = "GEMINI_API_KEYS is not set in the environment."
     else:
         try:
-            # Use the first key for the health check
             current_key = GEMINI_API_KEYS[0]
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={current_key}"
             payload = {"contents": [{"parts": [{"text": "ping"}]}]}
@@ -456,6 +409,10 @@ def generate_exam():
         session["exam_questions"] = questions
         session["exam_type"] = exam_type
         return jsonify({"message": "Exam generated successfully.", "redirectUrl": url_for("exam")})
+    except NonJsonResponseError as e:
+        app.logger.error(f"Caught a non-JSON response from the API: {e.content[:500]}")
+        error_message = f"The API returned an unexpected HTML page, indicating a server or network error. Raw HTML: {e.content}"
+        return jsonify({"error": error_message}), 500
     except Exception as e:
         app.logger.error(f"Error generating questions for exam '{exam_type}': {e}", exc_info=True)
         return jsonify({"error": "Failed to generate exam questions. The AI service might be down or misconfigured."}), 500
@@ -497,6 +454,10 @@ def generate_topic_exam():
             "difficulty": difficulty,
             "duration": duration
         })
+    except NonJsonResponseError as e:
+        app.logger.error(f"Caught a non-JSON response from the API for topic '{topic}': {e.content[:500]}")
+        error_message = f"The API returned an unexpected HTML page, indicating a server or network error. Raw HTML: {e.content}"
+        return jsonify({"error": error_message}), 500
     except Exception as e:
         app.logger.error(f"Error generating questions for topic '{topic}': {e}", exc_info=True)
         return jsonify({"error": "Failed to generate topic exam questions. The AI service might be down or misconfigured."}), 500
@@ -598,7 +559,6 @@ def score_exam():
 
 @app.errorhandler(404)
 def not_found_error(error):
-    """Custom 404 error handler to return JSON for API routes."""
     if request.path.startswith('/api/'):
         return jsonify({
             "error": "Not Found",
@@ -609,7 +569,6 @@ def not_found_error(error):
 
 @app.errorhandler(500)
 def internal_server_error(error):
-    """Custom 500 error handler to return JSON for API routes."""
     app.logger.error(f"Server Error: {error}", exc_info=True)
     if request.path.startswith('/api/'):
         return jsonify({
