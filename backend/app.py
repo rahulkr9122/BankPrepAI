@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import re
 import datetime
 import time
@@ -29,19 +30,12 @@ class NonJsonResponseError(Exception):
         super().__init__(message)
         self.content = content
 
-# Gemini API Keys for load balancing
-GEMINI_API_KEYS_STR = os.getenv("GEMINI_API_KEYS", "")
-GEMINI_API_KEYS = [key.strip() for key in GEMINI_API_KEYS_STR.split(',') if key.strip()]
+# Gemini API Key
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    app.logger.warning("No Gemini API key found. Please set `GEMINI_API_KEY` in your .env file.")
 
-if not GEMINI_API_KEYS:
-    single_key = os.getenv("GEMINI_API_KEY")
-    if single_key:
-        GEMINI_API_KEYS.append(single_key)
-
-if not GEMINI_API_KEYS:
-    app.logger.warning("No Gemini API keys found. Please set `GEMINI_API_KEYS` or `GEMINI_API_KEY` in your .env file.")
-
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
 USE_GEMINI = True
 
 EXAM_LIBRARY = {
@@ -148,80 +142,56 @@ def extract_and_normalize_questions(json_string):
 
 
 def call_gemini(prompt):
-    if not GEMINI_API_KEYS:
-        raise ValueError("GEMINI_API_KEYS are not set. Please add them to your .env file.")
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY is not set. Please add it to your .env file.")
 
-    start_key_index = session.get("gemini_key_index", 0)
+    app.logger.info("Calling Gemini API...")
     
-    for i in range(len(GEMINI_API_KEYS)):
-        key_index = (start_key_index + i) % len(GEMINI_API_KEYS)
-        current_key = GEMINI_API_KEYS[key_index]
-        
-        app.logger.info(f"Using Gemini API key with index: {key_index}")
-        
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={current_key}"
-        
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0.2,
-                "candidateCount": 1,
-                "response_mime_type": "application/json",
-            }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "candidateCount": 1,
+            "response_mime_type": "application/json",
         }
+    }
 
-        # We try each key only once to fail faster and avoid Gunicorn timeouts.
-        # Retries for the same key are disabled in favor of quickly cycling to the next available key.
+    try:
+        response = requests.post(url, json=payload, timeout=60)
+        response.raise_for_status()
+
+        content_type = response.headers.get('Content-Type', '')
+        if 'application/json' not in content_type:
+            raise NonJsonResponseError(
+                f"Gemini API returned non-JSON response. Content-Type: {content_type}",
+                response.text
+            )
+
+        json_response = response.json()
+        
+        if 'error' in json_response:
+            error_message = json_response['error'].get('message', 'Unknown error')
+            app.logger.error(f"Gemini API returned an error: {error_message}")
+            raise RuntimeError(f"Gemini API error: {error_message}")
+
         try:
-            # Setting a generous 60-second timeout for the API call itself.
-            response = requests.post(url, json=payload, timeout=60)
-            response.raise_for_status()
-
-            content_type = response.headers.get('Content-Type', '')
-            if 'application/json' not in content_type:
-                raise NonJsonResponseError(
-                    f"Gemini API returned non-JSON response for key index {key_index}. Content-Type: {content_type}",
-                    response.text
-                )
-
-            json_response = response.json()
-            
-            if 'error' in json_response:
-                error_message = json_response['error'].get('message', 'Unknown error')
-                # Log the error and move to the next key.
-                app.logger.error(f"Gemini API returned an error for key index {key_index}: {error_message}")
-                continue # Go to the next key
-
-            try:
-                raw_text = json_response['candidates'][0]['content']['parts'][0]['text']
-            except (KeyError, IndexError, TypeError) as e:
-                app.logger.error(f"Failed to parse Gemini response structure for key index {key_index}. Error: {e}. Response: {json_response}")
-                continue # Go to the next key
-
-            # If successful, update the key index and return the questions.
-            session["gemini_key_index"] = key_index
+            raw_text = json_response['candidates'][0]['content']['parts'][0]['text']
             return extract_and_normalize_questions(raw_text)
+        except (KeyError, IndexError, TypeError) as e:
+            app.logger.error(f"Failed to parse Gemini response structure. Error: {e}. Response: {json_response}")
+            raise RuntimeError("Failed to parse Gemini response.")
 
-        except requests.exceptions.Timeout:
-            app.logger.warning(f"Request timed out for key at index {key_index}. Switching to next key.")
-            continue # Go to the next key
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 429:
-                app.logger.warning(f"Gemini API key at index {key_index} is rate-limited. Switching to next key.")
-            elif e.response.status_code in [400, 403]:
-                app.logger.warning(f"Gemini API key at index {key_index} failed with status {e.response.status_code}. Switching key. Error: {e.response.text}")
-            else:
-                app.logger.error(f"An HTTP error occurred with key at index {key_index}: {e}. Switching key.")
-            continue # Go to the next key
-        except ValueError as e:
-            # This handles JSON decoding errors or other value-related issues.
-            app.logger.error(f"A ValueError occurred with key at index {key_index}: {e}. Switching key.")
-            continue # Go to the next key
-        except Exception as exc:
-            app.logger.error(f"An unexpected error occurred with key at index {key_index}: {exc}. Switching key.")
-            continue # Go to the next key
-    
-    raise RuntimeError("Gemini API call failed for all available keys and retries.")
+    except requests.exceptions.Timeout:
+        app.logger.error("Request to Gemini API timed out.")
+        raise RuntimeError("Request to Gemini API timed out.")
+    except requests.exceptions.HTTPError as e:
+        app.logger.error(f"An HTTP error occurred: {e}. Status code: {e.response.status_code}. Response: {e.response.text}")
+        raise RuntimeError(f"HTTP error from Gemini API: {e.response.status_code}")
+    except Exception as exc:
+        app.logger.error(f"An unexpected error occurred: {exc}.")
+        raise RuntimeError(f"An unexpected error occurred: {exc}")
 
 
 def build_prompt(exam_type, topics, difficulty, count, guidance):
@@ -269,14 +239,41 @@ Verify that every question is factually correct and that the provided answer is 
 def generate_questions(exam_type, topics, difficulty, count):
     config = get_exam_config(exam_type)
     guidance = config.get("prompt_guidance", "")
-    prompt = build_prompt(exam_type, topics, difficulty, count, guidance)
-    questions = call_gemini(prompt)
-    if not questions:
-        raise RuntimeError("API returned no questions.")
+    
+    all_questions = []
+    batch_size = 12
+    remaining_questions = count
+
+    while remaining_questions > 0:
+        current_batch_size = min(batch_size, remaining_questions)
+        app.logger.info(f"Generating a batch of {current_batch_size} questions...")
+        
+        prompt = build_prompt(exam_type, topics, difficulty, current_batch_size, guidance)
+        
+        try:
+            questions_batch = call_gemini(prompt)
+            if questions_batch:
+                all_questions.extend(questions_batch)
+            else:
+                app.logger.warning("API returned no questions for a batch.")
+
+        except Exception as e:
+            app.logger.error(f"Failed to generate a batch of questions: {e}")
+            # Continue to the next batch, or you might fail the entire process
+            pass
+
+        remaining_questions -= current_batch_size
+        
+        if remaining_questions > 0:
+            app.logger.info("Waiting for 15 seconds before next API call...")
+            time.sleep(15)
+
+    if not all_questions:
+        raise RuntimeError("API returned no questions for any batch.")
 
     unique_questions = []
     seen_questions = set()
-    for q in questions:
+    for q in all_questions:
         question_text = q.get("question", "").strip().lower()
         if question_text and question_text not in seen_questions:
             unique_questions.append(q)
@@ -319,6 +316,10 @@ def exam():
     exam_type = session.get("exam_type")
     if not questions or not exam_type:
         return redirect(url_for("index"))
+
+    # Shuffle the questions for randomness
+    random.shuffle(questions)
+    
     config = get_exam_config(exam_type)
     total_duration = sum(section.get("duration", 20) for section in config.get("sections", []))
     return render_template("exam.html", questions=questions, exam_type=exam_type, total_duration=total_duration)
@@ -329,12 +330,11 @@ def health():
     gemini_status = "down"
     gemini_error = None
     model_found = False
-    if not GEMINI_API_KEYS:
-        gemini_error = "GEMINI_API_KEYS is not set in the environment."
+    if not GEMINI_API_KEY:
+        gemini_error = "GEMINI_API_KEY is not set in the environment."
     else:
         try:
-            current_key = GEMINI_API_KEYS[0]
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={current_key}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
             payload = {"contents": [{"parts": [{"text": "ping"}]}]}
             response = requests.post(url, json=payload, timeout=30)
             response.raise_for_status()
