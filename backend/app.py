@@ -100,6 +100,77 @@ EXAM_LIBRARY = {
 }
 
 
+ENGLISH_SUB_TOPIC_BASE_BREAKDOWN = {
+    "reading comprehension": 2,
+    "phrase replacement": 5,
+    "fill in the blanks": 5,
+    "odd sentence out": 5,
+    "para jumbles": 5,
+    "cloze test": 5,
+    "sentence connectors": 3,
+    "misspelt words": 3,
+    "error detection": 2,
+    "word swap": 5,
+    "word rearrangement": 2,
+    "idioms and phrases": 3,
+    "synonyms and antonyms": 4
+}
+
+
+NUMERICAL_ABILITY_SUB_TOPIC_BASE_BREAKDOWN = {
+    "simplification or approximation": 3,
+    "missing series or wrong series": 4,
+    "quadratic equation": 5,
+    "Data Interpretation (DI)": 2,
+    "time and work": 3,
+    "pipe and cistern": 2,
+    "problems with ages": 3,
+    "average": 3,
+    "Ratio and proportion": 3,
+    "simple and compound interest": 3,
+    "partnership": 3
+}
+
+
+REASONING_SUB_TOPIC_BASE_BREAKDOWN = {
+    "blood relation": 5,
+    "direction and distance": 2,
+    "alphanumeric series": 3,
+    "syllogism": 3,
+    "coding decoding": 3,
+    "seating arrangement": 2,
+    "inequality": 2,
+    "box based puzzle": 3,
+    "floor based puzzle": 3,
+    "day month year age based puzzle": 3,
+    "linear row and double row arrangement": 3
+}
+
+
+def get_scaled_sub_topic_counts(base_breakdown, target_total):
+    base_total = sum(base_breakdown.values())
+    if base_total == 0:
+        return {}
+
+    # Calculate scaled counts and store remainders
+    scaled_counts = {}
+    remainders = {}
+    for topic, count in base_breakdown.items():
+        scaled_value = count * target_total / base_total
+        scaled_counts[topic] = int(scaled_value)
+        remainders[topic] = scaled_value - int(scaled_value)
+
+    # Distribute remainder based on largest fractional parts
+    remainder_to_distribute = target_total - sum(scaled_counts.values())
+    
+    sorted_by_remainder = sorted(remainders.keys(), key=lambda t: remainders[t], reverse=True)
+
+    for i in range(remainder_to_distribute):
+        scaled_counts[sorted_by_remainder[i % len(sorted_by_remainder)]] += 1
+        
+    return {k: v for k, v in scaled_counts.items() if v > 0}
+
+
 def extract_and_normalize_questions(json_string):
     try:
         if "```json" in json_string:
@@ -195,41 +266,57 @@ def call_gemini(prompt):
 
 
 def build_prompt(exam_type, topics, difficulty, count, guidance):
-    topic_list = ", ".join(topics)
-    
+    topic = topics[0]  # Expecting a single topic now
+
     prompt_lines = [
-        f"""You are an expert creator of mock test questions for Indian banking exams. Your task is to generate a high-quality, realistic question paper. 
-Generate exactly {count} multiple-choice questions for the '{exam_type}' exam. 
-The questions must cover these topics: {topic_list}. 
-The overall difficulty must be strictly '{difficulty}'. 
-The style, format, and complexity of the questions should closely mirror the last 2-3 years of official papers for this specific exam. 
-Crucially, create a completely fresh and new question set. Do not repeat questions or patterns from your training data. Every single question in this response must be unique. 
-Distribute the questions evenly across the requested topics. """
+        f"""You are an expert creator of mock test questions for Indian banking exams. Your task is to generate a high-quality, realistic question paper.
+Generate exactly {count} multiple-choice questions for the '{exam_type}' exam, focusing exclusively on the '{topic}' topic.
+The overall difficulty must be strictly '{difficulty}'.
+The style, format, and complexity of the questions should closely mirror the last 2-3 years of official papers for this specific exam.
+Crucially, create a completely fresh and new question set. Do not repeat questions or patterns from your training data. Every single question in this response must be unique."""
     ]
 
     if guidance:
         prompt_lines.append(f"Follow this specific guidance for '{exam_type}': {guidance}. ")
 
-    if "English" in topics:
+    if topic == "English":
+        scaled_breakdown = get_scaled_sub_topic_counts(ENGLISH_SUB_TOPIC_BASE_BREAKDOWN, count)
+        if scaled_breakdown:
+            sub_topic_details = ", ".join([f"{st} ({c} questions)" for st, c in scaled_breakdown.items()])
+            prompt_lines.append(
+                f"For the English section, you must generate questions with this exact sub-topic distribution: {sub_topic_details}. "
+            )
         prompt_lines.append(
-            "For English, include a mix of: reading comprehension, phrase replacement, fill in the blanks, odd sentence out, para jumbles, cloze test, sentence connectors, misspelt words, error detection, word swap, word rearrangement, idioms/phrases, and synonyms/antonyms. "
+            "The available sub-topics include: reading comprehension, phrase replacement, fill in the blanks, odd sentence out, para jumbles, cloze test, sentence connectors, misspelt words, error detection, word swap, word rearrangement, idioms/phrases, and synonyms/antonyms. "
         )
-    if "Numerical Ability" in topics:
+    elif topic == "Numerical Ability":
+        scaled_breakdown = get_scaled_sub_topic_counts(NUMERICAL_ABILITY_SUB_TOPIC_BASE_BREAKDOWN, count)
+        if scaled_breakdown:
+            sub_topic_details = ", ".join([f"{st} ({c} questions)" for st, c in scaled_breakdown.items()])
+            prompt_lines.append(
+                f"For the Numerical Ability section, you must generate questions with this exact sub-topic distribution: {sub_topic_details}. "
+            )
         prompt_lines.append(
             "For Numerical Ability, include: simplification/approximation, number series (missing/wrong), quadratic equations, Data Interpretation (DI), and Arithmetic (e.g., time/work, pipes/cisterns, age problems, average, ratio, interest, partnership). All questions must require calculation and logical steps, not just be simple knowledge questions. "
         )
-    if "Reasoning" in topics:
+    elif topic == "Reasoning":
+        scaled_breakdown = get_scaled_sub_topic_counts(REASONING_SUB_TOPIC_BASE_BREAKDOWN, count)
+        if scaled_breakdown:
+            sub_topic_details = ", ".join([f"{st} ({c} questions)" for st, c in scaled_breakdown.items()])
+            prompt_lines.append(
+                f"For the Reasoning section, you must generate questions with this exact sub-topic distribution: {sub_topic_details}. "
+            )
         prompt_lines.append(
             "For Reasoning, it is CRITICAL that all questions are logically sound, unambiguous, and have one single correct answer among the options. Double-check your logic. Include a mix of: blood relation, direction/distance, alphanumeric series, syllogism, coding-decoding, seating arrangement, inequality, and puzzles (box, floor, day/month/year, linear row). Ensure puzzles are solvable within a reasonable time for an exam setting. "
         )
 
     prompt_lines.append(
-        """Return raw JSON only. Do not include markdown, explanations, or any text outside of the JSON structure. 
-The JSON must be a single object with a 'questions' key, which is a list of question objects. 
-Each question object must have this exact structure: {"question": "...", "options": ["..."], "answer": "...", "topic": "...", "sub_topic": "..."}. 
-The 'topic' must be one of the required syllabus topics. 
-The 'sub_topic' must be the specific area (e.g., 'reading comprehension', 'seating arrangement', 'data interpretation'). 
-The 'answer' must be the full text of one of the provided options, not a letter or index. 
+        """Return raw JSON only. Do not include markdown, explanations, or any text outside of the JSON structure.
+The JSON must be a single object with a 'questions' key, which is a list of question objects.
+Each question object must have this exact structure: {"question": "...", "options": ["..."], "answer": "...", "topic": "...", "sub_topic": "..."}.
+The 'topic' must be the required syllabus topic.
+The 'sub_topic' must be the specific area (e.g., 'reading comprehension', 'seating arrangement', 'data interpretation').
+The 'answer' must be the full text of one of the provided options, not a letter or index.
 Verify that every question is factually correct and that the provided answer is unambiguously the right one. """
     )
     
@@ -240,56 +327,70 @@ def generate_questions(exam_type, topics, difficulty, count):
     config = get_exam_config(exam_type)
     guidance = config.get("prompt_guidance", "")
 
-    # Over-request to account for deduplication
-    buffer_factor = 1.2
-    target_count = int(count * buffer_factor)
+    unique_questions = []
+    seen_questions = set()
+    max_attempts = 5  # Increased attempts for better reliability
+    current_attempt = 0
+    
+    # The prompt includes temperature, but a little client-side randomization can help
+    # break cache or repetitive patterns if the model gets stuck.
+    base_prompt = build_prompt(exam_type, topics, difficulty, count, guidance)
 
-    all_questions = []
-    batch_size = 12
-    remaining_questions = target_count
+    while len(unique_questions) < count and current_attempt < max_attempts:
+        needed = count - len(unique_questions)
+        
+        # We ask for a few more than needed to account for potential duplicates.
+        request_count = needed + 3 
 
-    while remaining_questions > 0:
-        current_batch_size = min(batch_size, remaining_questions)
-        app.logger.info(f"Generating a batch of {current_batch_size} questions...")
+        app.logger.info(
+            f"Attempt {current_attempt + 1}/{max_attempts}: Need {needed} more questions. "
+            f"Requesting a batch of {request_count} to ensure enough unique results."
+        )
 
-        prompt = build_prompt(exam_type, topics, difficulty, current_batch_size, guidance)
+        # Add a unique element to the prompt for each attempt to avoid cached responses
+        attempt_prompt = f"{base_prompt}\nGenerate a varied set, attempt {current_attempt + 1}."
 
         try:
-            questions_batch = call_gemini(prompt)
+            questions_batch = call_gemini(attempt_prompt)
+            
             if questions_batch:
-                all_questions.extend(questions_batch)
+                newly_added = 0
+                for q in questions_batch:
+                    # Basic validation
+                    if not all(k in q for k in ["question", "options", "answer"]):
+                        continue
+
+                    question_text = q.get("question", "").strip().lower()
+                    
+                    if question_text and question_text not in seen_questions:
+                        unique_questions.append(q)
+                        seen_questions.add(question_text)
+                        newly_added += 1
+                
+                app.logger.info(f"Added {newly_added} new unique questions from this batch.")
+
             else:
-                app.logger.warning("API returned no questions for a batch.")
+                app.logger.warning("API returned no questions for this batch.")
 
         except Exception as e:
             app.logger.error(f"Failed to generate a batch of questions: {e}")
-            # Continue to the next batch, or you might fail the entire process
-            pass
+            # Do not increment attempt on a hard failure, but wait before retrying
+            time.sleep(2)
+            continue # Skip to the next attempt without incrementing
 
-        remaining_questions -= current_batch_size
+        current_attempt += 1
 
-        if remaining_questions > 0:
-            app.logger.info("Waiting for 2 seconds before next API call...")
+        if len(unique_questions) < count and current_attempt < max_attempts:
+            app.logger.info("Waiting for 2 seconds before the next API call...")
             time.sleep(2)
 
-    if not all_questions:
-        raise RuntimeError("API returned no questions for any batch.")
-
-    unique_questions = []
-    seen_questions = set()
-    for q in all_questions:
-        question_text = q.get("question", "").strip().lower()
-        if question_text and question_text not in seen_questions:
-            unique_questions.append(q)
-            seen_questions.add(question_text)
-
-    questions = unique_questions
-    if len(questions) < count:
+    if len(unique_questions) < count:
         app.logger.warning(
-            f"AI returned {len(questions)} unique questions, which is less than the requested {count}, even after attempting to generate {target_count}."
+            f"After {max_attempts} attempts, the AI returned {len(unique_questions)} unique questions, "
+            f"which is less than the requested {count}. The exam will proceed with the questions generated so far."
         )
 
-    return questions[:count]
+    return unique_questions[:count]
 
 
 def get_exam_config(exam_type):
@@ -405,13 +506,18 @@ def generate_exam():
     if not sections:
         return jsonify({"error": f"No sections found for exam type '{exam_type}'."}), 404
 
-    topics = [section["topic"] for section in sections]
-    total_questions = sum(section["questions"] for section in sections)
     difficulty = config.get("difficulty")
-
+    all_questions = []
     try:
-        questions = generate_questions(exam_type, topics, difficulty, total_questions)
-        session["exam_questions"] = questions
+        for section in sections:
+            topic = section["topic"]
+            count = section["questions"]
+            app.logger.info(f"Generating {count} questions for topic: {topic}")
+            # Note: generate_questions expects a list of topics, so we pass [topic]
+            questions_for_topic = generate_questions(exam_type, [topic], difficulty, count)
+            all_questions.extend(questions_for_topic)
+        
+        session["exam_questions"] = all_questions
         session["exam_type"] = exam_type
         return jsonify({"message": "Exam generated successfully.", "redirectUrl": url_for("exam")})
     except NonJsonResponseError as e:
